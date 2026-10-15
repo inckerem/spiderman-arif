@@ -3,6 +3,8 @@ import { shared, toonGradient, withMRT } from '../render/materials';
 import type { CollisionWorld } from '../physics/collision';
 import type { CityLayout } from '../world/types';
 import { loadBestTimes, saveBestTimes } from '../ui/settings';
+import { getMap } from '../maps/registry';
+import type { RingRouteId } from '../maps/types';
 
 export const RING_RADIUS = 5;
 /** A run is quietly dropped when the next ring is not reached in this time (no fail screen). */
@@ -23,7 +25,7 @@ export interface Ring {
 }
 
 export interface RouteInfo {
-  id: 'park' | 'downtown' | 'waterfront';
+  id: RingRouteId;
   rings: Ring[];
 }
 
@@ -103,57 +105,8 @@ export class RingRaces {
   // ------------------------------------------------------------------ layout
 
   private buildRoutes(): void {
-    const L = this.layout;
-    // Park: south edge to north edge, skirting the pond; each ring sits in a
-    // gap between canopies with tall trees ahead to swing from.
-    {
-      const P = L.park;
-      const pd = L.pond;
-      const cx = (P.minX + P.maxX) / 2;
-      const side = pd.cx - pd.rx - P.minX > P.maxX - (pd.cx + pd.rx) ? (P.minX + pd.cx - pd.rx) / 2 : (P.maxX + pd.cx + pd.rx) / 2;
-      const pts: Array<[number, number, number]> = [];
-      for (let i = 0; i < 7; i++) {
-        const u = i / 6;
-        const z = P.maxZ - 14 - u * (P.maxZ - P.minZ - 28);
-        const x = i === 0 || i === 6 ? cx : side + Math.sin(i * 1.7) * 18;
-        pts.push([x, 9 + (i % 2) * 2, z]);
-      }
-      this.addRoute('park', pts);
-    }
-    // Downtown towers: along the avenue through the tallest buildings.
-    {
-      const tall = [...L.buildings].sort((a, b) => b.height - a.height).slice(0, 16);
-      let bx = 0,
-        bz = 0;
-      for (const b of tall) {
-        bx += (b.footprint.minX + b.footprint.maxX) / 2;
-        bz += (b.footprint.minZ + b.footprint.maxZ) / 2;
-      }
-      bx /= tall.length;
-      bz /= tall.length;
-      let ave = L.avenues[0]!;
-      for (const a of L.avenues) if (!a.perimeter && Math.abs(a.center - bx) < Math.abs(ave.center - bx)) ave = a;
-      const zMax = Math.min(L.land.maxZ - 80, bz + 240),
-        zMin = Math.max(L.land.minZ + 80, zMax - 480);
-      const pts: Array<[number, number, number]> = [];
-      for (let i = 0; i < 7; i++) {
-        const z = zMax - (i / 6) * (zMax - zMin);
-        pts.push([ave.center + (i % 2 === 0 ? -3 : 3), 34 + (i % 3) * 12, z]);
-      }
-      this.addRoute('downtown', pts);
-    }
-    // Waterfront: along the east promenade toward the bridge.
-    {
-      // Over the waterfront drive, between the last row of buildings and the promenade.
-      const edge = L.avenues[L.avenues.length - 1]!;
-      const x = edge.center;
-      const pts: Array<[number, number, number]> = [];
-      for (let i = 0; i < 5; i++) pts.push([x, 10 + (i % 2) * 3, -420 + i * 80]);
-      const deck = L.bridge.deck;
-      const tower = L.bridge.towers[0];
-      pts.push([tower ? tower.minX - 14 : deck.minX + 40, deck.maxY + 9, (deck.minZ + deck.maxZ) / 2]);
-      this.addRoute('waterfront', pts);
-    }
+    // The map's routes; each ring is placed in a clear spot near its wanted point.
+    for (const r of getMap(this.layout.mapId).ringRoutes(this.layout)) this.addRoute(r.id, r.pts);
   }
 
   private addRoute(id: RouteInfo['id'], pts: Array<[number, number, number]>): void {

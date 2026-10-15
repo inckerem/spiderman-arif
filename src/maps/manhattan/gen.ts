@@ -1,6 +1,6 @@
-import { Rng } from '../core/rng';
-import { clamp, lerp } from '../core/math';
-import { CURB } from '../physics/terrain';
+import { Rng } from '../../core/rng';
+import { clamp, lerp } from '../../core/math';
+import { CURB } from '../../physics/terrain';
 import {
   D_DOWNTOWN,
   D_LOW,
@@ -41,7 +41,7 @@ import {
   type StreetProp,
   type Tree,
   type Volume,
-} from './types';
+} from '../../world/types';
 
 const LAND: Rect = { minX: -720, maxX: 720, minZ: -760, maxZ: 760 };
 const ISLET: Rect = { minX: 975, maxX: 1085, minZ: -150, maxZ: 150 };
@@ -1160,6 +1160,7 @@ export function generateCity(seed: number): CityLayout {
 
   const parkTrees = ctx.trees.filter((t) => t.park).length;
   return {
+    mapId: 'manhattan',
     seed,
     land: { ...LAND },
     islet: { ...ISLET },

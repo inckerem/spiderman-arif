@@ -2,7 +2,7 @@ import { Shape, ShapeGeometry, Vector2 } from 'three';
 import { GeomBuilder } from '../../render/geomBuilder';
 import { CURB } from '../../physics/terrain';
 import type { CityLayout, Rect } from '../types';
-import { LIGHTHOUSE } from '../cityCollision';
+import { LIGHTHOUSE } from '../../maps/manhattan/colliders';
 
 const ASPHALT: [number, number, number] = [0.2, 0.21, 0.24];
 const SIDEWALK: [number, number, number] = [0.66, 0.63, 0.58];

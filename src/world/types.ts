@@ -1,5 +1,7 @@
 /** Plain-data description of the generated city. Rendering and physics are built from it. */
 
+import type { MapId } from '../maps/ids';
+
 export interface Rect {
   minX: number;
   maxX: number;
@@ -170,6 +172,8 @@ export interface BridgeSpec {
 }
 
 export interface CityLayout {
+  /** Map this layout belongs to (src/maps/ids.ts). */
+  mapId: MapId;
   seed: number;
   land: Rect;
   islet: Rect;

@@ -4,6 +4,8 @@ import { Rng } from '../core/rng';
 import type { TickInput } from '../input/input';
 import type { CollisionWorld } from '../physics/collision';
 import type { CityLayout } from '../world/types';
+import { getMap } from '../maps/registry';
+import { WP_PARK, WP_ROOF, WP_WATERFRONT, type Waypoint } from '../maps/types';
 import { MODE_AIR, MODE_GROUND, MODE_SWING, MODE_TRAVERSE, MODE_WALL, MODE_ZIP, type Player } from './player';
 import { makeAnchorResult, type AnchorResult } from './targeting';
 
@@ -286,19 +288,7 @@ export class SwingBrain {
 // Autopilot: the hero behind the menus
 // -----------------------------------------------------------------------------
 
-export const WP_ROOF = 0;
-export const WP_PARK = 1;
-export const WP_WATERFRONT = 2;
-
-export interface Waypoint {
-  x: number;
-  z: number;
-  kind: number;
-  /** Building id for roofs, -1 otherwise. */
-  building: number;
-  /** Roof height (roofs only). */
-  roofY: number;
-}
+export { WP_PARK, WP_ROOF, WP_WATERFRONT, type Waypoint };
 
 export interface AutopilotStats {
   legs: number;
@@ -691,138 +681,16 @@ export class Autopilot {
     this.legT = 0;
   }
 
-  /**
-   * Route to the goal along the grid: over to the nearest avenue, along it to
-   * the street nearest the goal and along that street (or streets first),
-   * then in to the goal. Street canyons have anchors on both sides; the
-   * waterfront drive is left out (water on one side).
-   */
+  /** The leg to the goal, shaped by the map (on Manhattan: along avenues and streets, around the pond). */
   private planRoute(avenueFirst: boolean): void {
     const p = this.pilot.player.pos;
     const g = this.goal;
-    const L = this.layout;
-    const near = (roads: CityLayout['avenues'], v: number): number => {
-      let best = v,
-        bd = Infinity;
-      for (const r of roads) {
-        if (r.perimeter) continue;
-        const d = Math.abs(r.center - v);
-        if (d < bd) {
-          bd = d;
-          best = r.center;
-        }
-      }
-      return best;
-    };
-    let n = 0;
-    const put = (x: number, z: number): void => {
-      const prev = n > 0 ? this.route[n - 1]! : null;
-      if (prev && Math.hypot(prev[0] - x, prev[1] - z) < 12) return;
-      this.route[n]![0] = x;
-      this.route[n]![1] = z;
-      n++;
-    };
-    put(p.x, p.z);
-    if (avenueFirst) {
-      const ax = near(L.avenues, p.x),
-        sz = near(L.streets, g.z);
-      put(ax, p.z);
-      put(ax, sz);
-      put(g.x, sz);
-    } else {
-      const sz = near(L.streets, p.z),
-        ax = near(L.avenues, g.x);
-      put(p.x, sz);
-      put(ax, sz);
-      put(ax, g.z);
-    }
-    put(g.x, g.z);
-    if (n < 2) {
-      this.route[1]![0] = g.x + 1;
-      this.route[1]![1] = g.z;
-      n = 2;
-    }
-    this.routeN = n;
-    this.avoidPond();
+    this.routeN = getMap(this.layout.mapId).autopilot.route(this.layout, p.x, p.z, g.x, g.z, avenueFirst, this.route);
     this.follow.seg = 0;
   }
 
-  /**
-   * The park pond has nothing to swing from above it: a leg that would cross
-   * it (with a margin) goes around its nearer side instead.
-   */
-  private avoidPond(): void {
-    const pd = this.layout.pond;
-    const rx = pd.rx + 30,
-      rz = pd.rz + 30;
-    const inside = (x: number, z: number): boolean => ((x - pd.cx) / rx) ** 2 + ((z - pd.cz) / rz) ** 2 < 1;
-    for (let i = 0; i + 1 < this.routeN && this.routeN < this.route.length; i++) {
-      const a = this.route[i]!,
-        b = this.route[i + 1]!;
-      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      let hit = false;
-      for (let k = 1, steps = Math.max(2, Math.ceil(len / 10)); k < steps && !hit; k++) {
-        const t = k / steps;
-        hit = inside(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
-      }
-      if (!hit) continue;
-      // Around the side that keeps the leg shortest: east or west for a north-south leg, else north or south.
-      const ns = Math.abs(b[1] - a[1]) > Math.abs(b[0] - a[0]);
-      let bx = 0,
-        bz = 0,
-        best = Infinity;
-      for (const sgn of [-1, 1]) {
-        const x = ns ? pd.cx + sgn * (rx + 15) : (a[0] + b[0]) / 2;
-        const z = ns ? (a[1] + b[1]) / 2 : pd.cz + sgn * (rz + 15);
-        const d = Math.hypot(x - a[0], z - a[1]) + Math.hypot(b[0] - x, b[1] - z);
-        if (d < best) {
-          best = d;
-          bx = x;
-          bz = z;
-        }
-      }
-      for (let j = this.routeN; j > i + 1; j--) {
-        this.route[j]![0] = this.route[j - 1]![0];
-        this.route[j]![1] = this.route[j - 1]![1];
-      }
-      this.route[i + 1]![0] = bx;
-      this.route[i + 1]![1] = bz;
-      this.routeN++;
-      i++;
-    }
-  }
-
   private buildWaypoints(): void {
-    const L = this.layout;
-    const t = this.world.terrain;
-    for (const b of L.buildings) {
-      const v = b.volumes[b.volumes.length - 1]!;
-      if (v.maxY < 22 || v.maxY > 170 || v.maxX - v.minX < 12 || v.maxZ - v.minZ < 12) continue;
-      this.waypoints.push({ x: (v.minX + v.maxX) / 2, z: (v.minZ + v.maxZ) / 2, kind: WP_ROOF, building: b.id, roofY: v.maxY });
-    }
-    const P = L.park;
-    for (let x = P.minX + 30; x < P.maxX - 20; x += 60) {
-      for (let z = P.minZ + 30; z < P.maxZ - 20; z += 60) {
-        // Not on or near the pond (nothing to swing from above the water).
-        const pd = L.pond;
-        const nearPond = ((x - pd.cx) / (pd.rx + 40)) ** 2 + ((z - pd.cz) / (pd.rz + 40)) ** 2 < 1;
-        if (!t.isWater(x, z) && !nearPond) this.waypoints.push({ x, z, kind: WP_PARK, building: -1, roofY: 0 });
-      }
-    }
-    // The waterfront: a ring 45 m inside the island's edge.
-    const R = L.land;
-    const inset = 45;
-    const add = (x: number, z: number): void => {
-      if (!t.isWater(x, z)) this.waypoints.push({ x, z, kind: WP_WATERFRONT, building: -1, roofY: 0 });
-    };
-    for (let x = R.minX + inset; x <= R.maxX - inset; x += 90) {
-      add(x, R.minZ + inset);
-      add(x, R.maxZ - inset);
-    }
-    for (let z = R.minZ + inset + 90; z <= R.maxZ - inset - 90; z += 90) {
-      add(R.minX + inset, z);
-      add(R.maxX - inset, z);
-    }
+    for (const w of getMap(this.layout.mapId).autopilot.waypoints(this.layout, this.world.terrain)) this.waypoints.push(w);
     for (const w of this.waypoints) this.byKind[w.kind]!.push(w);
   }
 }

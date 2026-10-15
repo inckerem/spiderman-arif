@@ -1,6 +1,7 @@
 import { App } from './app';
 import { tr } from './i18n/tr';
 import { resolveMapId } from './maps/select';
+import { getMap } from './maps/registry';
 import { loadSettings } from './ui/settings';
 
 function fatal(message: string): void {
@@ -28,9 +29,9 @@ async function boot(): Promise<void> {
     fatal(tr.warnings.noWebGL);
     return;
   }
-  const seedParam = new URLSearchParams(location.search).get('seed');
-  const seed = seedParam ? Number(seedParam) | 0 : 1337;
   const mapId = resolveMapId(location.search, loadSettings().map);
+  const seedParam = new URLSearchParams(location.search).get('seed');
+  const seed = seedParam ? Number(seedParam) | 0 : getMap(mapId).defaultSeed;
   const app = new App(canvas, uiRoot);
   await app.boot(seed, mapId);
   // Load-time marker (read by the performance check; harmless in play).

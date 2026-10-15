@@ -21,7 +21,8 @@ import { Input, emptyTickInput, type TickInput } from './input/input';
 import { CollisionWorld, F_CANOPY } from './physics/collision';
 import { Player, MODE_NAMES, MODE_ZIP, type PlayerEvent } from './player/player';
 import { CameraRig } from './camera/cameraRig';
-import { generateCity } from './world/cityGen';
+import { getMap } from './maps/registry';
+import { getMapVisuals } from './maps/renderRegistry';
 import { buildCollisionWorld } from './world/cityCollision';
 import type { CityLayout } from './world/types';
 import { DebugPanel } from './debug/debugPanel';
@@ -164,11 +165,12 @@ export class Game {
     p(0.05, 'layout');
     await nextFrame();
     const t0 = performance.now();
-    this.layout = generateCity(this.opts.seed);
+    const map = getMap(this.opts.mapId);
+    this.layout = map.generate(this.opts.seed);
     const t1 = performance.now();
     p(0.35, 'collision');
     await nextFrame();
-    this.world = buildCollisionWorld(this.layout);
+    this.world = buildCollisionWorld(this.layout, map);
     const t2 = performance.now();
     console.info(
       `[skythread] city generated in ${(t1 - t0).toFixed(0)} ms, collision in ${(t2 - t1).toFixed(0)} ms: ` +
@@ -189,7 +191,7 @@ export class Game {
     this.attract = new AttractMode(this.world, this.layout, this.hero, this.opts.seed);
     this.attract.onEvent = (e) => this.fxEvent(e, this.attract.player);
     this.rain = new Rain(this.opts.seed);
-    this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
+    this.visuals = await buildCityVisuals(this.layout, getMapVisuals(this.layout.mapId), (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
     p(0.88, 'shaders');
     this.sky = new Sky(this.opts.seed);

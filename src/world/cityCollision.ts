@@ -1,7 +1,6 @@
 import {
   CollisionWorld,
   F_ANCHOR,
-  F_BRIDGE,
   F_BUILDING,
   F_CAMERA,
   F_CANOPY,
@@ -17,7 +16,7 @@ import {
   SURF_STONE,
   SURF_WOOD,
 } from '../physics/collision';
-import { Terrain } from '../physics/terrain';
+import type { MapDefinition } from '../maps/types';
 import {
   D_DOWNTOWN,
   PROP_ANTENNA,
@@ -43,12 +42,12 @@ export const LAMP_HEIGHT = 7.2;
 export const PARK_LAMP_HEIGHT = 4.4;
 export const TRAFFIC_LIGHT_HEIGHT = 6.4;
 export const BILLBOARD_POST = 2.6;
-export const LIGHTHOUSE = { x: 1062, z: 2, r: 3.6, h: 31 };
 
-/** Register every collider of the generated city. */
-export function buildCollisionWorld(layout: CityLayout): CollisionWorld {
-  const terrain = new Terrain(layout);
-  const w = new CollisionWorld(terrain, -1300, -1150, 1300, 1150, 32768);
+/** Register every collider of the generated city: buildings, trees and props, then the map's own. */
+export function buildCollisionWorld(layout: CityLayout, map: MapDefinition): CollisionWorld {
+  const terrain = map.createTerrain(layout);
+  const e = map.collisionExtent;
+  const w = new CollisionWorld(terrain, e.minX, e.minZ, e.maxX, e.maxZ, 32768);
   const BLD = F_BUILDING | F_ANCHOR | F_CLIMB | F_CAMERA;
   for (const b of layout.buildings) {
     const surf = b.district === D_DOWNTOWN ? SURF_GLASS : SURF_CONCRETE;
@@ -161,21 +160,8 @@ export function buildCollisionWorld(layout: CityLayout): CollisionWorld {
   for (const b of layout.parkWalls) w.addBox(b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ, F_PROP | F_LOW | F_CAMERA, SURF_STONE);
   for (const b of layout.railings) w.addBox(b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ, F_PROP | F_LOW, SURF_METAL);
   for (const p of layout.piers) w.addBox(p.minX, -4, p.minZ, p.maxX, p.top, p.maxZ, F_PROP | F_CAMERA, SURF_WOOD);
-  // Bridge
-  const br = layout.bridge;
-  const BR = F_BRIDGE | F_ANCHOR | F_CAMERA;
-  w.addBox(br.deck.minX, br.deck.minY, br.deck.minZ, br.deck.maxX, br.deck.maxY, br.deck.maxZ, BR, SURF_CONCRETE);
-  // Deck side rails (walkable deck with edges).
-  w.addBox(br.deck.minX, br.deck.maxY, br.deck.minZ, br.deck.maxX, br.deck.maxY + 1.1, br.deck.minZ + 0.3, F_BRIDGE | F_ANCHOR, SURF_METAL);
-  w.addBox(br.deck.minX, br.deck.maxY, br.deck.maxZ - 0.3, br.deck.maxX, br.deck.maxY + 1.1, br.deck.maxZ, F_BRIDGE | F_ANCHOR, SURF_METAL);
-  for (const t of br.towers) w.addBox(t.minX, t.minY, t.minZ, t.maxX, t.maxY, t.maxZ, BR | F_CLIMB, SURF_STONE);
-  for (const t of br.beams) w.addBox(t.minX, t.minY, t.minZ, t.maxX, t.maxY, t.maxZ, BR | F_CLIMB, SURF_STONE);
-  for (const t of br.anchorages) w.addBox(t.minX, t.minY, t.minZ, t.maxX, t.maxY, t.maxZ, BR | F_CLIMB, SURF_STONE);
-  for (const s of br.suspenders) w.addCylinder(s[0], s[1], s[2], s[3], 0.22, F_BRIDGE | F_ANCHOR, SURF_METAL);
-  // Lighthouse on the islet.
-  const L = LIGHTHOUSE;
-  w.addCylinder(L.x, L.z, 0.15, L.h, L.r, F_BUILDING | F_ANCHOR | F_CAMERA, SURF_STONE);
-  w.addCylinder(L.x, L.z, L.h, L.h + 4.5, L.r * 0.7, F_BUILDING | F_ANCHOR | F_CAMERA, SURF_METAL);
+  // Map-specific colliders (bridges, landmarks) come last, as before the map abstraction.
+  map.addColliders(w, layout);
   w.build();
   void SURF_GRAVEL;
   return w;

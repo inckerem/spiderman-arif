@@ -215,6 +215,9 @@ export const tr = {
     park: 'Park Rotası',
     downtown: 'Kuleler Rotası',
     waterfront: 'Rıhtım Rotası',
+    'ist-minare': 'Minare Rotası',
+    'ist-halic': 'Haliç Rotası',
+    'ist-bogaz': 'Boğaz Rotası',
   },
   photo: {
     title: 'Fotoğraf Modu',
