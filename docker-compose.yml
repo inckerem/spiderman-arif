@@ -1,0 +1,33 @@
+# SKYTHREAD game server. Only Nginx is public: the container port is bound to
+# 127.0.0.1. Start: docker compose up -d --build. Settings: README "Deploy".
+services:
+  skythread:
+    build: .
+    image: skythread:latest
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      PORT: "8080"
+      MAX_PLAYERS_PER_ROOM: "16"
+      MAX_ROOMS: "200"
+      MAX_CONN_PER_IP: "8"
+      PRIVATE_ROOM_IDLE_S: "60"
+      RECONNECT_GRACE_S: "30"
+      # Nginx in front adds X-Forwarded-For; trust its last hop for per-IP limits.
+      TRUST_PROXY: "1"
+      # The public origin of the game (browsers send it with the WebSocket upgrade).
+      ALLOWED_ORIGINS: "https://oyun.example.com"
+      LOG_LEVEL: "info"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

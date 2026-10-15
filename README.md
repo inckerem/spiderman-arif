@@ -40,6 +40,50 @@ npm run preview      # http://127.0.0.1:4173
 
 Behind the main menu the hero swings through the city on autopilot, filmed by a cinematic camera that cuts between chase, side, low-angle, aerial and orbit shots (attract mode; not playable). Click **Oyna** (Play) to start: the hero begins on the spawn roof and the game captures the mouse (pointer lock). Audio starts after the first click or key press. Press `Esc` to pause; **Ana Menü** in the pause menu goes back to the attract mode. URL parameter `?seed=1234` generates a different city.
 
+### Multiplayer server (development)
+
+Multiplayer (M12) runs on a small Node.js game server in `server/` that shares the protocol and room code in `src/net/` and `src/sim/` with the client. The server and its rooms are in place; the in-game multiplayer menu and remote heroes come in a later step, so the game itself still plays single player.
+
+```bash
+npm run server:test  # builds dist-server/server.mjs and runs it on 127.0.0.1:8787 (no static files, test hooks on)
+npm run dev          # the dev server proxies /ws to 127.0.0.1:8787 (SKYTHREAD_SERVER_PORT changes the target)
+npm run build && npm run build:server && npm run server   # production-style: dist/ and /ws on 0.0.0.0:8080
+```
+
+The server takes its settings from environment variables (table below) or the same names as command-line flags (`--port=8787`, `--max-players-per-room=4`, `--static=` for no static files, `--test-hooks`).
+
+## Sunucuya kurulum / Deploy
+
+One Docker container serves the built game and the multiplayer WebSocket on port 8080; Nginx in front terminates TLS on a subdomain and forwards both. The in-game interface stays Turkish; nothing here changes the language.
+
+What the server needs: a Linux machine with Docker Engine and the Compose plugin, Nginx, a DNS record (A, and AAAA if you have IPv6) for the subdomain pointing at it, and ports 80 and 443 open. The examples use the placeholder `oyun.example.com`; replace it with your subdomain everywhere.
+
+1. Get the code: `git clone <repository URL> /opt/skythread && cd /opt/skythread`.
+2. Edit `docker-compose.yml`: set `ALLOWED_ORIGINS` to your address (`https://oyun.example.com`). Change other settings from the table below if needed.
+3. Build and start: `docker compose up -d --build`. The first build takes a few minutes. Check it: `curl -f http://127.0.0.1:8080/healthz` prints `{"ok":true,...}` and `docker compose ps` shows the container as `healthy`. The port is bound to 127.0.0.1 only, so the game is not reachable from outside until Nginx forwards it.
+4. Get a TLS certificate, for example with Certbot: `sudo systemctl stop nginx && sudo certbot certonly --standalone -d oyun.example.com && sudo systemctl start nginx`. The example config serves `/.well-known/acme-challenge/` from `/var/www/certbot`, so once it is active, switch renewals to that path without stopping Nginx: `sudo mkdir -p /var/www/certbot && sudo certbot certonly --webroot -w /var/www/certbot -d oyun.example.com --force-renewal`.
+5. Install the Nginx config: `sudo cp deploy/nginx/skythread.conf /etc/nginx/sites-available/skythread.conf`, replace the domain (`sudo sed -i 's/oyun.example.com/YOUR.SUBDOMAIN/g' /etc/nginx/sites-available/skythread.conf`), enable it (`sudo ln -s /etc/nginx/sites-available/skythread.conf /etc/nginx/sites-enabled/`; on distributions without `sites-enabled`, copy it to `/etc/nginx/conf.d/` instead), then `sudo nginx -t && sudo systemctl reload nginx`. The config redirects HTTP to HTTPS, forwards `/ws` with the WebSocket upgrade headers and one-hour timeouts, and compresses the game files.
+6. Open `https://oyun.example.com`.
+
+Updating: `git pull && docker compose up -d --build`. Logs: `docker compose logs -f`. Rooms and players right now: `curl http://127.0.0.1:8080/healthz`. Stopping: `docker compose down`. The container runs as the unprivileged `node` user with a read-only file system and a 512 MB memory limit; a player whose connection drops keeps the slot for 30 s, but a container restart ends all rooms.
+
+The game also works under a path instead of a subdomain (asset paths are relative and the server accepts any path ending in `/ws`): proxy that path to the container and strip the prefix.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PORT` | `8080` | HTTP and WebSocket port |
+| `HOST` | `0.0.0.0` | Listen address (`127.0.0.1` outside Docker if only a local proxy should reach it) |
+| `STATIC_DIR` | `dist` (`/app/dist` in the image) | Built game files to serve; empty serves none (WebSocket and `/healthz` only) |
+| `MAX_PLAYERS_PER_ROOM` | `16` | Players per room; a full public room opens the next one ("#2", "#3", ...) |
+| `MAX_ROOMS` | `200` | Rooms on the server (public and private together); beyond it joins are refused as full |
+| `MAX_CONN_PER_IP` | `8` | Open WebSocket connections per client address |
+| `PRIVATE_ROOM_IDLE_S` | `60` | An empty private room is closed after this many seconds |
+| `RECONNECT_GRACE_S` | `30` | A dropped player's slot (name, health) is kept this long for a reconnect |
+| `TRUST_PROXY` | `0` (`1` in compose) | Take the client address from the last `X-Forwarded-For` hop; set it only behind your own proxy |
+| `ALLOWED_ORIGINS` | empty (any) | Comma-separated origins allowed to open the WebSocket, e.g. `https://oyun.example.com` |
+| `TEST_HOOKS` | `0` | Accept test-only debug messages; never on a public server |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` or `silent` |
+
 ## Controls
 
 | Key | Action |
@@ -98,6 +142,7 @@ The suite drives the dev build headless (Playwright + Chromium with SwiftShader)
 npm test                         # whole suite (starts the dev server if needed)
 npx playwright test tests/soak.spec.ts   # 30 simulated minutes (long)
 npm run test:quick               # smoke test only
+npm run test:server              # game server checks in Node (no browser, no dev server)
 ```
 
 | Test | Checks |
@@ -113,6 +158,8 @@ npm run test:quick               # smoke test only
 | i `keybindings.spec.ts` | Rebinding with keys and mouse buttons (conflicts, cancel, clear, reserved keys, no click-through, arrow-key navigation), controls screen and photo panel follow the bindings, the game reacts to the new keys only, persistence and corrupt storage (including codes named like `toString`) |
 | j `attract.spec.ts` | j1: the menu autopilot runs 6 simulated minutes headless: never stuck, in water, below ground, inside geometry or NaN, little ground time, long distance, swings, pull lines, wall runs and perches; the cinematic camera never inside geometry with the hero in frame. j2: the rooftop moment never starts right after a new game on the spawn roof, then starts only after 5 s still on a roof (not on the street, not while moving, not during a race), brings music, night, rain, letterbox and the orbit camera, holds while paused (a flash goes out) and through M and mouse jitter, and a key, a deliberate mouse movement or a click (firing no line) restores the music, rain, HUD and the exact hour, while an hour key keeps its hour |
 | `smoke.spec.ts` | Page loads with a clean console and no request leaves the origin |
+| `server.spec.ts` | Node only: protocol codec round trips (hero states with every block and event, enemy snapshots within 5 cm), message validation, names and the profanity filter (leetspeak, allow list, `#2` suffixes), room codes (no ambiguous characters, 10 000 unique), clock sync and interpolation, the shared Room (relay, 110 m/s sanity check, corrections and the kick, reconnect grace, shared clock, PvP gating, combat hook), RoomManager (16 per public room, overflow into #2, private codes), rate limits, sessions, and that the shared net/sim modules stay pure |
+| `serverE2e.spec.ts` | Builds and starts `dist-server/server.mjs` serving `dist/` on a free port: `/healthz`, static files and caching, raw WebSocket bots that see each other's movement, 17 bots (the 17th lands in public #2), private room by code, PvP only in private rooms, cheat correction and kick, reconnect with the token, oversize and garbage frames, connections per IP, graceful shutdown |
 
 Numbers from each run are written to `test-results/*.json`. Software GL in a sandbox does not represent real GPU frame rates, so the suite measures simulation time per tick, draw calls, triangles and memory instead of FPS.
 
@@ -140,8 +187,13 @@ src/
   ui/               menus, HUD, minimap, settings persistence, photo panel
   i18n/tr.ts        all in-game text (Turkish)
   debug/            tuning panel, test API and in-page test drivers
+  net/              multiplayer protocol, codec, names, maps, clock sync, interpolation (shared by client and server)
+  sim/              the shared Room (players, relay, sanity checks, clock, combat hook), map runtime
+server/             Node game server: static files, /healthz, WebSocket rooms, limits
+deploy/nginx/       example Nginx server block for a subdomain
+Dockerfile, docker-compose.yml   one-container deployment
 docs/               spec, architecture, milestones, decisions
-tests/              Playwright specs a-j, smoke, soak
+tests/              Playwright specs a-j, smoke, soak, server (Node only)
 public/audio/       theme.mp3 (the user's music track)
 ```
 

@@ -4,7 +4,7 @@ This document is the plan the code follows. It is written before the code and ke
 
 ## 1. Stack
 
-- TypeScript (strict), Vite, three.js 0.186.1 (pinned), lil-gui (debug panel), Playwright 1.56.1 (tests, uses the preinstalled Chromium).
+- TypeScript (strict), Vite, three.js 0.186.1 (pinned), lil-gui (debug panel), Playwright 1.56.1 (tests, uses the preinstalled Chromium). The multiplayer game server runs on Node.js 22 with `ws` 8.18.3.
 - No physics engine. A custom kinematic character controller runs against an analytic static collision world (boxes, vertical cylinders, ellipsoids, a terrain height function and water).
 - Everything is generated at load time from a seed: geometry, textures (canvas 2D), sounds (WebAudio synthesis). The only file asset is `public/audio/theme.mp3`, fetched from the same origin.
 
@@ -29,11 +29,13 @@ This document is the plan the code follows. It is written before the code and ke
 | `life/` | Instanced traffic on a lane graph with traffic-light phases and turns, instanced pedestrians on sidewalk loops and park paths with a shader walk cycle; both stay concentrated around the player. Visual only, never collide with the player. |
 | `extras/` | Ring races (3 routes, timer, best times, minimap markers). `attractMode.ts`: the menu background (its own Player and unrendered aim rig driven by the autopilot, its own animator on the shared hero mesh, the director). `rooftopMoment.ts`: the rooftop moment state machine (idle, arming, in, active, out), local to this client. |
 | `debug/` | lil-gui panel (backtick), `window.__game` test API (dev builds only), in-page test drivers (fuzz, anchor availability, traversal bots, attract mode and rooftop moment, soak); the bots use the shared autopilot code. |
+| `net/` | Multiplayer modules shared by the browser and the Node server (pure): `protocol.ts` (message types, `NET` rates and limits, room codes), `codec.ts` (binary hero state / relay batch / enemy snapshot, validated JSON), `names.ts` (name rules, profanity filter, `#2` suffixes), `maps.ts` (map ids and online seeds), `clock.ts` (ping clock sync, shared day clock, hour pull), `interp.ts` (interpolation buffer). |
+| `sim/` | `room.ts`: the shared `Room` (pure; the server runs one per room, M11's LocalLink one in-process). `types.ts`: the `RoomSim` combat hook and the combat shapes it carries. `nullSim.ts`: the presence-only sim used until M11. `mapRuntime.ts`: city layout and collision world per map. |
 | `game.ts` | Composition root for the 3D game: loop, simulation, camera views (gameplay rig with the rooftop-moment orbit blend, menu attract mode, photo free camera), hero, effects, weather (rain, mood grade, overcast, lightning), rendering. |
 | `app.ts` | Application shell: owns UI, audio and the game; screen flow loading → main menu → playing ↔ paused / photo mode; pointer-lock gating; settings application; HUD, minimap and audio listener updates; drives the rooftop moment and the music presence; maps simulation events to sounds. |
 | `main.ts` | Boot: WebGL2 check, seed from the URL, creates the App, installs the test API in dev builds. |
 
-Dependency direction: `config`, `core` ← `physics` ← `world` (generation produces colliders) ← `player` ← `camera` ← `character`/`render`/`fx`/`life`/`extras` ← `game` ← `app` (with `audio` and `ui`). The simulation (`physics`, `player`, world generation data) never imports rendering code, so it can be stepped headless at full speed by the test drivers.
+Dependency direction: `config`, `core` ← `physics` ← `world` (generation produces colliders) ← `player` ← `camera` ← `character`/`render`/`fx`/`life`/`extras` ← `game` ← `app` (with `audio` and `ui`). The simulation (`physics`, `player`, world generation data) never imports rendering code, so it can be stepped headless at full speed by the test drivers. `net/` and `sim/` sit beside `physics`/`world`: they import only `three` math, `config/tuning`, `core/math|rng`, `physics/*` and `world/types|cityGen|cityCollision`, never DOM, rendering or Node APIs (checked by `tests/server.spec.ts`), so the same files run in the browser, in Node and in tests.
 
 ## 3. Fixed-timestep loop
 
@@ -132,8 +134,32 @@ Dynamic resolution follows the cost the resolution can change, not the frame int
 
 - a `swing.spec.ts` rope and swing, b `fuzz.spec.ts` collision fuzz plus b2 head-on 95 m/s tunnelling check, c `anchors.spec.ts` anchor availability, d `traversal.spec.ts` traversal bots, e `soak.spec.ts` soak,
 - f `character.spec.ts` planted feet and limb clipping, landing crouch and release tricks, g `ui.spec.ts` settings/costume/audio/pause/photo flow, h `rings.spec.ts` ring races, traffic and pedestrians, i `keybindings.spec.ts` rebinding and its effect in game, j `attract.spec.ts` attract mode (6 headless minutes) and the rooftop moment, plus `smoke.spec.ts` (clean console, no request leaves the origin).
+- `server.spec.ts` and `serverE2e.spec.ts` run in Node without a page (`npm run test:server` uses `playwright.node.config.ts`, which starts no dev server): unit checks of the shared protocol, names, Room and server modules, and an end-to-end run of the built server with raw WebSocket bots (`tests/netBot.ts`).
 
-## 10. Launchers
+## 10. Multiplayer server (M12)
+
+Design: `docs/design/m11-m12-combat-multiplayer.md` (M12). Movement is client-authoritative (each client simulates its own hero at 120 Hz and uploads it at 20 Hz); combat, crime events, health and the day-night clock are server-authoritative.
+
+```
+server/main.ts         entry (dist-server/server.mjs): config, start, SIGTERM/SIGINT graceful stop
+server/app.ts          one http.Server: GET /healthz, static dist/, WebSocket upgrade on */ws (origin check,
+                       connections per IP), 30 Hz drift-corrected loop over all rooms, 20 s ping heartbeat
+server/config.ts       env vars (PORT, MAX_PLAYERS_PER_ROOM, ...) with the same names as --flags
+server/roomManager.ts  public rooms per map (#1, overflow #2, ...), private rooms by 6-character code,
+                       reconnect tokens, pid → connection routing, room cleanup
+server/session.ts      one socket: hello within 5 s, token buckets, garbage/flood kicks, leave/close handling
+server/limits.ts       token bucket, sustained-abuse meter, connections per IP, client address (X-Forwarded-For)
+server/static.ts       MIME map, traversal guard, cache headers (index.html no-cache, assets/* immutable)
+```
+
+- **Build:** `vite build --config vite.server.config.ts` (an SSR build with rolldown) bundles `server/` and the shared `src/` modules (three tree-shaken in, `ws` external) into one `dist-server/server.mjs`; `tsconfig.server.json` type-checks it without DOM types.
+- **Protocol** (`net/protocol.ts`, `net/codec.ts`, version 1): JSON text frames for control and combat events, little-endian binary frames for high-rate state: 0x01 own hero state (34 B at rest, 46 B on a line, plus events), 0x02 the relay batch (`u8 pid` + the sender's own body, its time clamped by the server), 0x03 enemy snapshot (18 B per enemy, 30 nearest within 300 m, 15 Hz). Messages over 4 KB close the socket (1009); malformed ones close it (1008).
+- **Room** (`sim/room.ts`): `admit` (name check, `#2` suffix, capacity, reconnect by token), `drop` (keep the slot for the 30 s grace, the hero frozen and `afk`, or remove it), `onState` (time clamp into [receive − 1 s, receive], sanity check, `RoomSim.upsertHero`, queue for relay), `onIntent` (hero targets rejected outside PvP rooms, times converted to sim seconds), `step(nowMs)` at 30 Hz (grace expiry, shared clock with a broadcast every 5 s, `RoomSim.step` only while someone is connected, `ce` event batch, snapshots every 2nd step, one relay batch per recipient). The host passes its millisecond clock; JSON times are room seconds; the Room converts to and from sim seconds.
+- **Movement sanity:** NaN or out of bounds (map bounds ± 400 m, y in [−5, 900]) → `correct`. A move longer than 110 m/s × Δt + 2 m is accepted only with a changed teleport counter and a target within 80 m, at the map spawn or at the sim's respawn point; otherwise `correct` with the last valid position. States still in flight before the client applied a correction are dropped without counting; a correction not applied within 1.5 s is sent (and counted) again; more than 5 in 10 s is a kick.
+- **Combat hook:** `RoomSim` (`sim/types.ts`) is what M11's `CombatSim` implements: `upsertHero`, `removeHero`, `intent`, `step` (exactly 1/30 s), `drainEvents`, `snapshot` (fill preallocated `EnemySnap`s), `crimeEvents`, `heroHp`, `respawnPoint`, `debug`. Rooms get it from a `RoomSimFactory`; until M11 it is `NullSim` (presence only).
+- **Deploy:** multi-stage `Dockerfile` (build stage runs `npm run build` and `npm run build:server`; the runtime stage has production dependencies, `dist/` and `dist-server/`, runs as `node`, `HEALTHCHECK` on `/healthz`), `docker-compose.yml` (port bound to 127.0.0.1:8080, read-only, `no-new-privileges`, 512 MB) and `deploy/nginx/skythread.conf` (TLS at Nginx, HTTP → HTTPS, WebSocket upgrade, one-hour proxy timeouts on `/ws`).
+
+## 11. Launchers
 
 `BASLAT-Windows.bat`, `BASLAT-Mac.command` and `BASLAT-Linux.sh` start the game from a fresh clone with nothing preinstalled. Each only finds a usable Node.js and hands over to `scripts/launch.mjs`, so the behaviour is the same everywhere:
 
