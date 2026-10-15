@@ -245,4 +245,36 @@ export const tr = {
     ['LİMAN BAR', 'RIHTIMDA CANLI MÜZİK'],
     ['PİKSEL OYUN', 'SEVİYE ATLA'],
   ] as Array<[string, string]>,
+  /** Multiplayer: server reasons (protocol codes from src/net/protocol.ts) and name checks (src/net/names.ts). */
+  net: {
+    reject: {
+      version: 'Oyun sürümün sunucuyla uyuşmuyor. Sayfayı yenile.',
+      name: 'Bu isim kullanılamaz.',
+      profanity: 'Bu isim uygun değil, başka bir isim seç.',
+      full: 'Oda dolu ya da sunucu şu an yeni oda açamıyor. Biraz sonra tekrar dene.',
+      notFound: 'Bu kodla bir oda bulunamadı.',
+      rate: 'Çok sık bağlanmaya çalıştın, biraz bekle.',
+      server: 'Sunucuda bir sorun oluştu.',
+    },
+    kick: {
+      cheat: 'Hareketlerin sunucu kurallarına uymadığı için odadan çıkarıldın.',
+      rate: 'Çok fazla mesaj gönderdiğin için odadan çıkarıldın.',
+      garbage: 'Bağlantıda geçersiz veri; odadan çıkarıldın.',
+      timeout: 'Bağlantı zaman aşımına uğradı.',
+      idle: 'Uzun süre hareketsiz kaldığın için odadan çıkarıldın.',
+      shutdown: 'Sunucu yeniden başlatılıyor.',
+      replaced: 'Bu oyuncuyla başka bir pencereden bağlanıldı.',
+    },
+    name: {
+      empty: 'Bir isim yaz.',
+      short: 'İsim en az 3 karakter olmalı.',
+      long: 'İsim en fazla 16 karakter olabilir.',
+      chars: 'Yalnızca harf, rakam, boşluk ve _ . - kullanılabilir.',
+      profanity: 'Bu isim uygun değil.',
+    },
+    corrected: 'Konumun sunucu tarafından düzeltildi.',
+    joined: (name: string) => `${name} odaya katıldı`,
+    left: (name: string) => `${name} odadan ayrıldı`,
+    lost: (name: string) => `${name} bağlantısını kaybetti`,
+  },
 } as const;

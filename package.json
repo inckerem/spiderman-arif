@@ -8,18 +8,24 @@
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build:server": "tsc --noEmit -p tsconfig.server.json && vite build --config vite.server.config.ts",
+    "server": "node dist-server/server.mjs",
+    "server:test": "npm run build:server && node dist-server/server.mjs --port=8787 --host=127.0.0.1 --static= --test-hooks",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "playwright test",
-    "test:quick": "playwright test --grep @quick"
+    "test:quick": "playwright test --grep @quick",
+    "test:server": "playwright test -c playwright.node.config.ts"
   },
   "dependencies": {
     "lil-gui": "0.21.0",
-    "three": "0.186.1"
+    "three": "0.186.1",
+    "ws": "8.18.3"
   },
   "devDependencies": {
     "@playwright/test": "1.56.1",
     "@types/node": "22.19.1",
     "@types/three": "0.186.0",
+    "@types/ws": "8.18.1",
     "typescript": "7.0.2",
     "vite": "8.3.4"
   }
