@@ -114,3 +114,118 @@ test('c1. combat room in the page: chase, hits, view interpolation, down and roo
   expect(await combat(page).then((s) => s.enabled)).toBe(true);
   expectClean(problems);
 });
+
+// c2. Routing: the context-sensitive left click (strike and lunge on an enemy,
+// the web line exactly as before without one), F always strikes.
+test('c2. combat routing: enemy under the crosshair strikes, otherwise the web line as before', async ({ page }) => {
+  test.setTimeout(15 * 60 * 1000);
+  const problems = await openGame(page);
+  const r = await page.evaluate(() => (window as any).__game.combat.routingTest());
+  saveResult('c2-combat-routing', r);
+  console.log('c2. routing', JSON.stringify({ ...r, lines: undefined, edges: undefined }));
+  expect(r.startDist).toBeGreaterThan(6);
+  expect(r.captured).toBe(1);
+  expect(r.modeAfterPress).toBe('strike');
+  expect(r.lungeKind).toBe(0);
+  expect(r.ropeEver).toBe(false);
+  expect(r.webFire).toBe(false);
+  expect(r.lunge).toBe(true);
+  expect(r.strike).toBe(true);
+  expect(r.hits).toEqual([0]);
+  expect(r.enemyAfter.hp).toBe(50);
+  expect(r.distAfter).toBeLessThan(3);
+  expect(r.rejected).toBe(0);
+  expect(r.poseOk).toBe(true);
+  expect(r.subFrameStrike).toBe(true);
+  expect(r.subFrameHit).toBe(true);
+  expect(r.anchorPlanned).toBe(true);
+  expect(r.behindAttached).toBe(true);
+  expect(r.behindWebFire).toBe(true);
+  expect(r.autoStrike).toBe(true);
+  expect(r.autoHit).toBe(true);
+  expect(r.whiff).toBe(true);
+  expect(r.whiffIntents).toBe(0);
+  expect(r.poseFinite).toBe(true);
+  // No enemy: the line drivers give what tests/swing.spec.ts expects.
+  const l = r.lines;
+  expect(r.combatOnDuringLines).toBe(true);
+  for (const k of ['planned', 'attached', 'stillAttachedWhileHeld', 'releasedToAir', 'releaseEvent', 'heldBeforeSpace', 'spaceCut', 'zipPlanned', 'zipMode', 'zipCut']) expect(l[k], k).toBe(true);
+  expect(l.refiredWhileHeld).toBe(false);
+  expect(l.skyClickFired).toBe(false);
+  expect(l.releaseLift).toBeGreaterThan(4);
+  expect(l.tapLift).toBeLessThan(1);
+  const e = r.edges;
+  for (const k of ['clearPlanned', 'attachedBeforeClear', 'releasedAfterClear', 'attachedBeforeBlur', 'releasedAfterBlur', 'tapPlanned', 'subFrameFired', 'subFrameLetGo', 'groundStart', 'groundPlanned', 'firedFromGround', 'jumpedInFlight', 'lineKeptAfterSpace', 'attachedAfterSpace', 'wallClung', 'wallPlanned', 'firedFromWall', 'wallSpaceCut']) expect(e[k], k).toBe(true);
+  expect(e.refiredAfterClear).toBe(false);
+  expect(e.wallSpaceJumped).toBe(false);
+  expectClean(problems);
+});
+
+// c3. Combo chain with the input buffer, the counter, the ground finisher on a downed thug, the window reset, a takedown.
+test('c3. combat combo: chain, counter, ground finisher, window reset, takedown', async ({ page }) => {
+  test.setTimeout(10 * 60 * 1000);
+  const problems = await openGame(page);
+  const r = await page.evaluate(() => (window as any).__game.combat.comboTest());
+  saveResult('c3-combat-combo', r);
+  console.log('c3. combo', JSON.stringify(r));
+  expect(r.moves).toEqual([0, 1, 2, 3, 5]);
+  expect(r.combos).toEqual([1, 2, 3, 4, 5]);
+  expect(r.stateAfterChain).toBe('down');
+  expect(r.finalState).toBe('ko');
+  expect(r.comboAfterFinisher).toBe(5);
+  expect(r.rejected).toEqual([]);
+  expect(r.hudComboAfterWindow).toBe(0);
+  expect(r.simComboAfterWindow).toBe(0);
+  expect(r.takedownMoves).toEqual([6]);
+  expect(r.takedownState).toBe('ko');
+  expect(r.focusAfter).toBeLessThan(100);
+  expect(r.poseFinite).toBe(true);
+  expectClean(problems);
+});
+
+// c4. Right click on an enemy: tap yanks, hold pins; no enemy: the pull line.
+test('c4. combat web yank and pin; the pull line without an enemy', async ({ page }) => {
+  test.setTimeout(10 * 60 * 1000);
+  const problems = await openGame(page);
+  const r = await page.evaluate(() => (window as any).__game.combat.lineTest());
+  saveResult('c4-combat-lines', r);
+  console.log('c4. lines', JSON.stringify(r));
+  expect(r.yankEvent).toBe(true);
+  expect(r.yankZip).toBe(false);
+  expect(r.yankFrac).toBeGreaterThan(0.6);
+  expect(r.pinEvent).toBe(true);
+  expect(r.pinZip).toBe(false);
+  expect(r.pinDrift).toBeLessThan(0.2);
+  expect(r.pinnedSeconds).toBeGreaterThan(3);
+  expect(r.zipPlanned).toBe(true);
+  expect(r.plainZip).toBe(true);
+  expect(r.poseFinite).toBe(true);
+  expectClean(problems);
+});
+
+// c5. Space dodges only while a telegraph is due; an air dodge keeps the line.
+test('c5. combat dodge: Space in the window makes the swing miss; air dodge keeps the line', async ({ page }) => {
+  test.setTimeout(10 * 60 * 1000);
+  const problems = await openGame(page);
+  const r = await page.evaluate(() => (window as any).__game.combat.dodgeTest());
+  saveResult('c5-combat-dodge', r);
+  console.log('c5. dodge', JSON.stringify(r));
+  expect(r.withDodge.telegraph).toBe(true);
+  expect(r.withDodge.miss).toBe(true);
+  expect(r.withDodge.hit).toBe(false);
+  expect(r.withDodge.hpLost).toBe(0);
+  expect(r.withDodge.dodgeEvent).toBe(true);
+  expect(r.withDodge.jumped).toBe(false);
+  expect(r.withoutDodge.telegraph).toBe(true);
+  expect(r.withoutDodge.hit).toBe(true);
+  expect(r.withoutDodge.hpLost).toBeGreaterThan(0);
+  expect(r.rejected).toBe(0);
+  expect(r.anchorPlanned).toBe(true);
+  expect(r.airAttachedBefore).toBe(true);
+  expect(r.airDodge).toBe(true);
+  expect(r.airLineKept).toBe(true);
+  expect(r.airAttachedAfter).toBe(true);
+  expect(r.spaceCutWithoutThreat).toBe(true);
+  expect(r.poseFinite).toBe(true);
+  expectClean(problems);
+});

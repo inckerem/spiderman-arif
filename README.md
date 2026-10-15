@@ -46,9 +46,11 @@ Behind the main menu the hero swings through the city on autopilot, filmed by a 
 | --- | --- |
 | W A S D | Move; steer while swinging |
 | Mouse | Look |
-| Left mouse (hold) | Fire a web line where the crosshair points (up to 120 m) and swing while the button is down; let go to release with a push forward and up. Held with nothing usable under the crosshair, the line fires the moment the crosshair finds a point |
-| Right mouse | Pull line: pulls you toward the aimed point, a little faster than a swing (hop or mantle at the end) |
-| Space | Jump; on a swing or pull line, cut it with the same push as letting go; wall jump |
+| Left mouse (hold) | Fire a web line where the crosshair points (up to 120 m) and swing while the button is down; let go to release with a push forward and up. Held with nothing usable under the crosshair, the line fires the moment the crosshair finds a point. **With an enemy** under the crosshair (within 12 m, 20 m in the air), within 3 m in front of you, or near you during a combo: punch and kick instead, lunging to it first (jab, cross, kick, uppercut, repeating; a click during a strike queues the next one; a downed enemy gets the ground finisher) |
+| Right mouse | Pull line: pulls you toward the aimed point, a little faster than a swing (hop or mantle at the end). **On an enemy** under the crosshair (within 35 m): a tap yanks it to you, holding 0.3 s pins it in place with web |
+| Space | Jump; on a swing or pull line, cut it with the same push as letting go; wall jump. **While an enemy's attack on you is winding up**: dodge instead (a sidestep on the ground; in the air or on a line the line stays) |
+| F | Attack: always a strike, aimed at the enemy under the crosshair or the nearest one in view (a whiff with nobody around) |
+| E | Takedown: with a full focus meter (it fills with hits), knocks out the enemy within 4 m at once |
 | Shift (hold) | Sprint on the ground; cling to and climb walls |
 | C or Q | Dive in the air (trades height for speed) |
 | Mouse wheel | Reel the line in or out while swinging |
@@ -59,6 +61,8 @@ Behind the main menu the hero swings through the city on autopilot, filmed by a 
 | 1 / 2 / 3 / 4 | Dawn / noon / sunset / night |
 | Esc | Pause menu |
 | ` (backtick) | Debug and tuning panel |
+
+Combat is being built (M11): enemies do not appear in normal play yet. In a dev build (`npm run dev`), `__game.combat.spawnAhead(0, 8)` in the browser console spawns a thug 8 m ahead (`1` for a bat thug); enemies show as coloured capsules until their models arrive.
 
 These are the default keys. Every action except Esc, mouse look, the wheel, 1–4 and ` can be rebound under **Ayarlar > Tuş atamaları** (Settings > Key bindings): two keys or mouse buttons per action, saved in the browser. The controls screen and the photo panel always show the current keys, named after the player's keyboard layout (Turkish Q and F layouts included).
 
@@ -84,11 +88,12 @@ Tap **Oyna**: play starts at once (there is no pointer lock on touch). On Androi
 | --- | --- |
 | Left thumb, anywhere on the left side | Floating stick (appears under the thumb): push a little to walk, all the way to run, to the rim (it turns amber) to sprint; steers while swinging |
 | Drag on the right side | Look (own sensitivity under Ayarlar > Dokunmatik bakış hassasiyeti; invert Y applies) |
-| AĞ (hold) | Web line and swing, exactly like holding the left mouse button; let go to release with the push |
+| AĞ (hold) | Web line and swing, exactly like holding the left mouse button; let go to release with the push (on an enemy under the crosshair: a strike, like the left button) |
 | ÇEK | Pull line (right mouse) |
 | ZIPLA | Jump, cut a line, wall jump (Space) |
 | DALIŞ (hold) | Dive (C/Q) |
 | TIRMAN (hold) | Cling to and climb walls (Shift); also sprints on the ground |
+| SALDIRI | Attack (F): strike the nearest enemy in view, lunging to it; hold 0.4 s for the takedown (E) |
 | + / − | Reel the line in or out (shown while swinging; hold to repeat) |
 | Pause (top left) | Pause menu; photo mode and the music toggle are in the pause menu |
 
@@ -139,7 +144,7 @@ npm run test:quick               # smoke test only
 | i `keybindings.spec.ts` | Rebinding with keys and mouse buttons (conflicts, cancel, clear, reserved keys, no click-through, arrow-key navigation), controls screen and photo panel follow the bindings, the game reacts to the new keys only, persistence and corrupt storage (including codes named like `toString`) |
 | j `attract.spec.ts` | j1: the menu autopilot runs 6 simulated minutes headless: never stuck, in water, below ground, inside geometry or NaN, little ground time, long distance, swings, pull lines, wall runs and perches; the cinematic camera never inside geometry with the hero in frame. j2: the rooftop moment never starts right after a new game on the spawn roof, then starts only after 5 s still on a roof (not on the street, not while moving, not during a race), brings music, night, rain, letterbox and the orbit camera, holds while paused (a flash goes out) and through M and mouse jitter, and a key, a deliberate mouse movement or a click (firing no line) restores the music, rain, HUD and the exact hour, while an hour key keeps its hour |
 | k `touch.spec.ts` | Mobile emulation (844x390, touch, DPR 2): touch mode and Low quality on the first run, Oyna plays without pointer lock, half a stick push walks at half run speed, a full push runs and the rim sprints, a right-side drag turns the camera (invert Y applies), AĞ held keeps a line while the stick, a look drag and a DALIŞ tap happen at once and letting go releases it, ZIPLA, DALIŞ and TIRMAN work, pushing a resting thumb counts as input, a held + lets go when the line goes, lost focus lets go of buttons and the stick, the pause button and Devam Et, portrait shows the rotate prompt and pauses (it can be dismissed; a landscape device with a tall window gets none), corrupt settings (`"x"`, `5`) are a first run (Low), menus (main, settings, controls, costume, pause) have no horizontal overflow, every button inside the screen and at least 44 px tall at 844x390 and 740x360; k2: a desktop gets no touch controls, `?dokunmatik=1` forces them |
-| `combat.spec.ts` | Combat in the page (manual stepping, combat switched on): c1 the single-player room through the local link: thugs chase, telegraph and hit the hero, a teleported hero is chased, the client view stays within one combat tick of the sim, debug capsules render, down then a roof respawn |
+| `combat.spec.ts` | Combat in the page (manual stepping, combat switched on): c1 the single-player room through the local link: thugs chase, telegraph and hit the hero, a teleported hero is chased, the client view stays within one combat tick of the sim, debug capsules render, down then a roof respawn; c2 routing: a thug under the crosshair takes the left click (lunge, jab, hit; no line, also for a click shorter than a tick), an enemy off the crosshair and out of range leaves the click to the line, the line control and edge-case drivers pass unchanged with combat on, F auto-targets beside the crosshair and whiffs with nobody around; c3 the chain (jab, cross, kick, uppercut through the input buffer, combo 1-4), the ground finisher on the downed thug (KO, combo 5), the counter resets after the window, a takedown with full focus; c4 right click: a tap yanks (over 60 % of the way), a hold pins (under 0.2 m drift), no enemy: the pull line; c5 Space during a bat swing's wind-up makes it miss (no jump, no damage), without it the hit lands, an air dodge on a held line keeps the line, and with no telegraph Space cuts the line as before; poses stay finite throughout |
 | `combatSim.spec.ts` | Node, no page: spawn points and respawn roofs, import purity of the pure combat code, the sim (damage, regeneration, dodges, strikes, combo, finishers, yank, pin, validation, determinism, cost) |
 | `smoke.spec.ts` | Page loads with a clean console and no request leaves the origin |
 

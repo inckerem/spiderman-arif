@@ -8,11 +8,13 @@ import { MODE_SWING, MODE_ZIP, type PlayerEvent } from './player/player';
 import type { Action } from './input/bindings';
 import { RooftopMoment } from './extras/rooftopMoment';
 import { tuning } from './config/tuning';
-import { TouchControls, detectTouchMode } from './input/touch';
+import { TouchControls, detectTouchMode, type TouchButtonHandler } from './input/touch';
 
 export type AppState = 'loading' | 'menu' | 'playing' | 'paused' | 'photo';
 
 const WATER_SAMPLES = 10;
+/** Holding the touch Saldırı button this long also sends the takedown (E). */
+const ATTACK_LONG_PRESS_MS = 400;
 /** The rotate prompt needs a viewport this much taller than wide (a near-square window, such as a foldable's, plays on). */
 const UPRIGHT_ASPECT = 1.2;
 
@@ -90,6 +92,11 @@ export class App {
   private portrait = false;
   /** The player chose to play upright anyway (until the device turns to landscape). */
   private portraitDismissed = false;
+  /** Touch Saldırı: shown while combat runs; held since (ms, -1 up); the long-press takedown already sent. */
+  private attackShown = false;
+  private attackDownAt = -1;
+  private finisherSent = false;
+  private attackHandler: TouchButtonHandler | null = null;
 
   constructor(private readonly canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
     this.touchMode = detectTouchMode();
@@ -532,6 +539,7 @@ export class App {
     if (touch) {
       touch.setView(this.state === 'playing' && game.playing ? 'play' : this.state === 'photo' ? 'photo' : 'off');
       touch.setSwinging(this.state === 'playing' && pl.mode === MODE_SWING && pl.rope.attached);
+      this.updateAttackButton(touch);
       touch.update(dt);
     }
     // Audio listener: the hero on screen (in the menu, the attract hero).
@@ -571,6 +579,36 @@ export class App {
         this.musicWarned = true;
         ui.toast(tr.warnings.musicMissing);
       }
+    }
+  }
+
+  /**
+   * Touch Saldırı (M11): shown while combat runs. A press is F (`attack`:
+   * always a strike, auto-targeting the nearest enemy in view); holding it
+   * 0.4 s also sends E (`finisher`, the takedown).
+   */
+  private updateAttackButton(touch: TouchControls): void {
+    const input = this.game.input;
+    const want = this.game.combatEnabled;
+    if (want !== this.attackShown) {
+      this.attackShown = want;
+      this.attackHandler ??= {
+        press: () => {
+          input.pressVirtual('attack');
+          this.attackDownAt = performance.now();
+          this.finisherSent = false;
+        },
+        release: () => {
+          input.releaseVirtual('attack');
+          this.attackDownAt = -1;
+        },
+      };
+      touch.setAttackHandler(want ? this.attackHandler : null);
+    }
+    if (this.attackDownAt >= 0 && !this.finisherSent && performance.now() - this.attackDownAt >= ATTACK_LONG_PRESS_MS) {
+      this.finisherSent = true;
+      input.pressVirtual('finisher');
+      input.releaseVirtual('finisher');
     }
   }
 

@@ -18,6 +18,11 @@ export interface TickInput {
   swingReleased: boolean;
   zip: boolean;
   zipPressed: boolean;
+  /** Melee attack held / pressed (F, the touch Saldırı button): always a strike, auto-targeted (M11). */
+  attack: boolean;
+  attackPressed: boolean;
+  /** Takedown pressed (E, a long press on Saldırı). */
+  finisherPressed: boolean;
   /** Mouse wheel notches this tick: positive reels in. */
   reel: number;
   yaw: number;
@@ -50,6 +55,9 @@ export function emptyTickInput(): TickInput {
     swingReleased: false,
     zip: false,
     zipPressed: false,
+    attack: false,
+    attackPressed: false,
+    finisherPressed: false,
     reel: 0,
     yaw: 0,
     pitch: 0,
@@ -210,6 +218,9 @@ export class Input {
     out.swingReleased = on && this.wasReleased('swing');
     out.zip = on && this.isHeld('zip');
     out.zipPressed = on && this.wasPressed('zip');
+    out.attack = on && this.isHeld('attack');
+    out.attackPressed = on && this.wasPressed('attack');
+    out.finisherPressed = on && this.wasPressed('finisher');
     out.reel = on ? this.wheelAcc : 0;
     out.yaw = yaw;
     out.pitch = pitch;

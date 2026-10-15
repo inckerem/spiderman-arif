@@ -43,6 +43,7 @@ import { LocalCombatLink } from './combat/client/localLink';
 import { makeHeroState } from './combat/client/link';
 import { fillHeroState } from './combat/client/heroState';
 import { DebugCapsules } from './combat/render/debugCapsules';
+import { HeroCombat } from './combat/client/heroCombat';
 import type { CombatEvent } from './combat/types';
 
 export interface GameOptions {
@@ -145,6 +146,8 @@ export class Game {
   combatView!: CombatView;
   /** Temporary enemy visuals (chunk 5 brings the rigs). */
   combatCapsules!: DebugCapsules;
+  /** The hero's side of combat: input routing, combos, lunge and dodge, hit prediction. */
+  heroCombat!: HeroCombat;
   /**
    * Combat runs while playing. Manual test mode turns it off (so the movement
    * specs' numbers never see it) unless a test switches it on.
@@ -212,6 +215,7 @@ export class Game {
     this.combatView = new CombatView();
     this.combatLink = new LocalCombatLink(this.combatSim, this.combatView);
     this.combatCapsules = new DebugCapsules(tuning.events.maxEnemiesSp);
+    this.heroCombat = new HeroCombat(this.player, this.world, this.combatLink);
     this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
     p(0.88, 'shaders');
@@ -348,24 +352,30 @@ export class Game {
       ti.swing = ti.swingPressed = ti.zip = ti.zipPressed = false;
     }
     this.fillAim(this.tickInput);
+    // Combat routing takes whole gestures aimed at enemies before the player sees them.
+    if (this.combatEnabled) this.heroCombat.route(this.tickInput, dt);
     const t0 = performance.now();
     this.player.step(dt, this.tickInput);
     this.simTimeMs += performance.now() - t0;
+    if (this.combatEnabled) {
+      // Contact frames and lunges, then the room; both may add player events, handled below.
+      this.heroCombat.after(this.player.events);
+      this.stepCombat(dt);
+    }
     this.chestPrev.copy(this.prevPos).y += 1.1;
     this.chestNow.copy(this.player.pos).y += 1.1;
-    if (!this.player.events.some((e) => e.type === 'respawn' || e.type === 'recover')) this.rings.check(this.chestPrev, this.chestNow, dt);
+    if (!this.player.events.some((e) => e.type === 'respawn' || e.type === 'recover' || e.type === 'revive')) this.rings.check(this.chestPrev, this.chestNow, dt);
     this.simTicksMeasured++;
     this.ticks++;
     for (const e of this.player.events) {
       this.eventLog.push(e);
       if (e.type === 'land' && e.impact > tuning.ground.hardLandingSpeed) this.rig.shake(e.impact);
-      if (e.type === 'respawn' || e.type === 'recover') this.prevPos.copy(this.player.pos);
+      if (e.type === 'respawn' || e.type === 'recover' || e.type === 'revive') this.prevPos.copy(this.player.pos);
       this.animator.onEvent(e);
       this.fxEvent(e, this.player);
       this.onPlayerEvent?.(e);
     }
     if (this.eventLog.length > 200) this.eventLog.splice(0, this.eventLog.length - 200);
-    if (this.combatEnabled) this.stepCombat(dt);
   }
 
   /** Upload the hero to the combat room, advance it (30 Hz inside), sample the view and handle what arrived. */
@@ -383,6 +393,7 @@ export class Game {
         this.prevPos.copy(this.player.pos);
         this.rig.snap();
       }
+      this.heroCombat.onEvent(e);
       this.onCombatEvent?.(e);
     }
   }
@@ -393,6 +404,8 @@ export class Game {
     this.combatSim.debugClear();
     this.combatSim.removeHero(link.selfPid);
     this.combatView.reset();
+    this.heroCombat.reset();
+    this.player.clearCombat();
     this.combatCapsules.update(this.combatView, 0);
   }
 
@@ -692,7 +705,7 @@ export class Game {
   }
 
   updateCamera(dt: number): void {
-    this.rig.update(dt, { pos: this.renderPos, vel: this.player.vel, mode: this.player.mode });
+    this.rig.update(dt, { pos: this.renderPos, vel: this.player.vel, mode: this.player.cameraMode });
     if (this.cineOrbit > 0.001) this.orbitCamera(dt);
     else this.orbitOn = false;
     const o = this.cameraOverride;

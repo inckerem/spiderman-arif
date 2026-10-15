@@ -234,10 +234,22 @@ test.describe('mobile', () => {
     report.started = started;
     expect(started).toEqual({ state: 'playing', lock: false, enabled: true, view: 'play' });
     for (const sel of ['.sk-tb-web', '.sk-tb-pull', '.sk-tb-jump', '.sk-tb-dive', '.sk-tb-climb', '.sk-tb-pause']) await expect(page.locator(sel)).toBeVisible();
-    // Saldırı waits for M11; reel buttons show only while swinging.
-    await expect(page.locator('.sk-tb-attack')).toBeHidden();
+    // Saldırı shows while combat runs (M11); reel buttons show only while swinging.
+    await expect(page.locator('.sk-tb-attack')).toBeVisible();
     await expect(page.locator('.sk-tb-reel-in')).toBeHidden();
     layouts.play = await layoutCheck(page, 'play 844x390');
+    // A tap on Saldırı is F: always a strike (a whiff with nobody around), never a line.
+    await page.evaluate(() => (window as any).__game.touchSpot('avenue'));
+    const a0 = (await player(page)).events;
+    const attack = await center(page, '.sk-tb-attack');
+    await fingers.tap(attack.x, attack.y, 60);
+    await page.waitForFunction((n) => {
+      const log = (window as any).__game.game.eventLog as Array<{ type: string }>;
+      return log.slice(n).some((e) => e.type === 'strike');
+    }, a0, { timeout: 10_000 });
+    const attackEvents = await eventsSince(page, a0);
+    report.attack = attackEvents;
+    expect(attackEvents).not.toContain('webFire');
 
     // --- Joystick: analog speed, full run, rim sprint ----------------------------------------
     const R = T.stickRadius as number;

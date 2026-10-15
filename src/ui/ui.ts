@@ -112,6 +112,8 @@ const CONTROL_ROW_ACTIONS: Partial<Record<ControlRowId, readonly Action[]>> = {
   swing: ['swing'],
   zip: ['zip'],
   jump: ['jump'],
+  attack: ['attack'],
+  finisher: ['finisher'],
   sprint: ['sprint'],
   dive: ['dive'],
   music: ['music'],
@@ -1213,6 +1215,7 @@ export class UI {
     left.append(this.group(B.groupMove, rows(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'dive'])));
     right.append(
       this.group(B.groupWeb, rows(['swing', 'zip'])),
+      this.group(B.groupFight, rows(['attack', 'finisher'])),
       this.group(B.groupOther, rows(['music', 'photo', 'timePause', 'timeFast'])),
     );
     cols.append(left, right);

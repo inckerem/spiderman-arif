@@ -4,7 +4,8 @@ import { tuning } from '../config/tuning';
 import { JOINTS, LIMB, type CharacterRig, type JointName } from './rig';
 import { aimQuaternion, setWorldQuaternion, solveTwoBone } from './ik';
 import { F_CANOPY, makeRayHit } from '../physics/collision';
-import { MODE_AIR, MODE_GROUND, MODE_SWING, MODE_TRAVERSE, MODE_WALL, MODE_ZIP, TRAV_VAULT, type Player, type PlayerEvent } from '../player/player';
+import { CA, MODE_AIR, MODE_GROUND, MODE_STRIKE, MODE_SWING, MODE_TRAVERSE, MODE_WALL, MODE_ZIP, TRAV_VAULT, type PlayerEvent } from '../player/player';
+import type { AnimSource } from './animSource';
 
 const S_IDLE = 0;
 const S_RUN = 1;
@@ -16,7 +17,9 @@ const S_WALL = 6;
 const S_TRAV = 7;
 const S_ROLL = 8;
 const S_RELEASE = 9;
-const NSTATE = 10;
+/** MODE_STRIKE: fighting stance (planted feet) or the lunge/dodge body; the move itself is the combat overlay. */
+const S_COMBAT = 10;
+const NSTATE = 11;
 /** Air tricks after letting go of a line. */
 const TRICK_SPREAD = 0;
 const TRICK_FLIP = 1;
@@ -59,6 +62,10 @@ const _xAxis = new Vector3(1, 0, 0);
 const _ct = new Vector3();
 const _keep = [new Quaternion(), new Quaternion(), new Quaternion()];
 
+/** Combat overlay blend: in over 0.06 s, out over 0.12 s after the action's length. */
+const CW_IN = 0.06;
+const CW_OUT = 0.12;
+
 interface FootPlant {
   planted: boolean;
   /** Ground contact point (world) while planted; current ground point while stepping. */
@@ -96,6 +103,13 @@ export class CharacterAnimator {
   private readonly weights: Spring[] = Array.from({ length: NSTATE }, (_, i) => new Spring(i === S_IDLE ? 1 : 0));
   private readonly poses: Quaternion[][] = Array.from({ length: NSTATE }, () => Array.from({ length: N }, () => new Quaternion()));
   private readonly blended: Quaternion[] = Array.from({ length: N }, () => new Quaternion());
+  /** Combat overlay pose and the joints it sets this frame. */
+  private readonly overlay: Quaternion[] = Array.from({ length: N }, () => new Quaternion());
+  private readonly overlayMask: boolean[] = Array.from({ length: N }, () => false);
+  /** Combat overlay weight, lying-down share (knocked out) and whether the stance plants its feet, this frame. */
+  private combatW = 0;
+  private lying = 0;
+  private combatPlanted = false;
   private readonly rootQ = new Quaternion();
   private readonly rootTarget = new Quaternion();
   private yaw = 0;
@@ -152,7 +166,7 @@ export class CharacterAnimator {
 
   constructor(
     private readonly rig: CharacterRig,
-    private readonly player: Player,
+    private readonly src: AnimSource,
   ) {}
 
   /** Forget foot plants, blends and tricks (the hero was moved or another animator posed it). */
@@ -171,7 +185,7 @@ export class CharacterAnimator {
       this.sinceRelease = 0;
       // A good release always flips; other strong, fast releases take turns
       // between a flip, a corkscrew and the spread; weak ones spread.
-      const strong = !e.broken && e.power > 0.6 && this.player.vel.length() > 12;
+      const strong = !e.broken && e.power > 0.6 && this.src.vel.length() > 12;
       this.trick = e.good ? TRICK_FLIP : strong ? TRICK_CYCLE[this.trickCount++ % TRICK_CYCLE.length]! : TRICK_SPREAD;
       this.tricks[this.trick]!++;
     } else if (e.type === 'land') {
@@ -187,7 +201,7 @@ export class CharacterAnimator {
   }
 
   private activeState(): number {
-    const p = this.player;
+    const p = this.src;
     switch (p.mode) {
       case MODE_GROUND:
         if (p.rollTimer > 0) return S_ROLL;
@@ -204,13 +218,15 @@ export class CharacterAnimator {
         return S_WALL;
       case MODE_TRAVERSE:
         return S_TRAV;
+      case MODE_STRIKE:
+        return S_COMBAT;
       default:
         return S_AIR;
     }
   }
 
   update(dt: number, feetPos: Vector3, camYaw: number): void {
-    const p = this.player;
+    const p = this.src;
     const rig = this.rig;
     const mesh = rig.mesh;
     dt = Math.min(dt, 0.05);
@@ -225,7 +241,13 @@ export class CharacterAnimator {
       this.initialized = true;
       this.lastPos.copy(feetPos);
     }
-    const blendRate = state === S_ROLL || state === S_TRAV || state === S_WALL ? 22 : 14;
+    const blendRate = state === S_ROLL || state === S_TRAV || state === S_WALL || state === S_COMBAT ? 22 : 14;
+    // Combat overlay: weight of the current action, lying share, planted stance.
+    const ca = p.combatAnim;
+    const cAge = p.time - ca.t0;
+    this.combatW = combatOverlayWeight(ca.action, cAge, ca.dur);
+    this.lying = ca.action === CA.DOWN ? smoothstep(0, 0.35, cAge) : ca.action === CA.GETUP ? 1 - smoothstep(0, ca.dur, cAge) : 0;
+    this.combatPlanted = state === S_COMBAT && p.grounded && ca.action !== CA.LUNGE && ca.action !== CA.DODGE;
     for (let i = 0; i < NSTATE; i++) {
       const w = this.weights[i]!;
       w.update(i === state ? 1 : 0, blendRate, dt);
@@ -246,6 +268,8 @@ export class CharacterAnimator {
     this.crouchPeak = Math.max(this.crouchPeak, this.crouchW);
     let targetYaw = this.yaw;
     if (state === S_WALL) targetYaw = Math.atan2(-p.wall.nx, -p.wall.nz);
+    // Combat moves face their target, whichever way they slide.
+    else if (state === S_COMBAT) targetYaw = wrapAngle(p.facing + Math.PI);
     else if (hs > 0.8) targetYaw = Math.atan2(v.x, v.z);
     // The simulation's facing uses the camera convention (forward = -Z at 0).
     else targetYaw = wrapAngle(p.facing + Math.PI);
@@ -295,6 +319,7 @@ export class CharacterAnimator {
       _q.setFromAxisAngle(_v2, twist);
       this.rootTarget.premultiply(_q);
     }
+    this.combatRoot(state, _right, _v2);
     const snap = state === S_ROLL || (state === S_RELEASE && this.trick !== TRICK_SPREAD);
     // Settle upright quickly on a wall so a tilted swing pose never leans into it.
     this.rootQ.slerp(this.rootTarget, snap ? 1 : dampFactor(state === S_WALL ? 30 : 16, dt));
@@ -302,9 +327,13 @@ export class CharacterAnimator {
     // Hips height: crouch on landings, lower while running so the legs can reach.
     this.hipsDrop.update(0, 9, dt);
     let hipsY = 0.98 + Math.max(-0.42, this.hipsDrop.value) * 0.18 - 0.34 * this.crouchW;
+    // Fighting stance a little lower; ground finisher and takedown dip; knocked out: the pelvis near the ground.
+    hipsY -= 0.07 * this.weights[S_COMBAT]!.value;
+    if (ca.action === CA.GROUND || ca.action === CA.TAKEDOWN || ca.action === CA.UPPER) hipsY -= 0.16 * this.combatW * Math.sin(Math.PI * clamp(cAge / Math.max(0.05, ca.dur), 0, 1));
+    hipsY += (0.22 - hipsY) * this.lying;
     if (state === S_ROLL) hipsY -= 0.42 * Math.sin(Math.PI * clamp(1 - p.rollTimer / tuning.ground.rollDuration, 0, 1));
     const loco = this.weights[S_IDLE]!.value + this.weights[S_RUN]!.value;
-    if (loco > 0.002 || state === S_IDLE || state === S_RUN) {
+    if (loco > 0.002 || state === S_IDLE || state === S_RUN || this.combatPlanted) {
       this.gait(dt, feetPos, hs);
       // Lowest at mid-stance, highest in the flight phase.
       const bob = hs > 0.6 ? -(0.02 + 0.025 * smoothstep(6, 16, hs)) * smoothstep(2, 8, hs) * Math.cos((this.phase - this.gaitDuty * 0.5) * Math.PI * 4) : 0;
@@ -356,6 +385,10 @@ export class CharacterAnimator {
       rig.bones[JOINTS[j]!].quaternion.copy(out);
     }
     mesh.updateMatrixWorld(true);
+    if (this.combatW > 0.002 || this.lying > 0.002) {
+      this.combatOverlay(ca.action, cAge, ca.dur, ca.side);
+      mesh.updateMatrixWorld(true);
+    }
     this.resolveLimbs();
     rig.bones.handL.getWorldPosition(this.handPos[0]!);
     rig.bones.handR.getWorldPosition(this.handPos[1]!);
@@ -368,7 +401,7 @@ export class CharacterAnimator {
 
   /** Limb clipping diagnostic: small spheres at the extremities vs solid geometry (foliage excluded). */
   private measureLimbs(): void {
-    const w = this.player.world;
+    const w = this.src.world;
     let worst = 0;
     let name = '';
     for (let i = 0; i < CLIP_JOINTS.length; i++) {
@@ -391,7 +424,7 @@ export class CharacterAnimator {
    * shoulder / hip), and feet are lifted so heel and toe stay above the ground.
    */
   private resolveLimbs(): void {
-    const w = this.player.world;
+    const w = this.src.world;
     const b = this.rig.bones;
     const ray = this.wallRay;
     for (let limb = 0; limb < 4; limb++) {
@@ -486,7 +519,7 @@ export class CharacterAnimator {
 
   /** Pose for state s. FK joints via Euler; IK limbs solve on the live bones, then copy. */
   private computePose(s: number, dt: number, feet: Vector3, camYaw: number): void {
-    const p = this.player;
+    const p = this.src;
     const t = this.time;
     const v = p.vel;
     const hs = Math.hypot(v.x, v.z);
@@ -698,6 +731,38 @@ export class CharacterAnimator {
         this.setE(s, 'handR', 0, 0, 0);
         break;
       }
+      case S_COMBAT: {
+        // Guard: fists up by the chin.
+        this.guardArms(s);
+        this.setE(s, 'spine', 0.08, 0, 0);
+        this.setE(s, 'chest', 0.05, 0, 0);
+        const ca = p.combatAnim;
+        if (this.combatPlanted) {
+          this.groundLegs(s);
+        } else if (ca.action === CA.LUNGE) {
+          // Dash: leading knee up, trailing leg long, the striking fist cocked.
+          this.setE(s, 'thighL', -1.15, 0, 0.06);
+          this.setE(s, 'shinL', 1.1, 0, 0);
+          this.setE(s, 'thighR', 0.45, 0, -0.06);
+          this.setE(s, 'shinR', 0.8, 0, 0);
+          this.setE(s, 'upperArmL', 0.7, 0, 0.35);
+          this.setE(s, 'foreArmL', -0.4, 0, 0);
+          this.setE(s, 'upperArmR', -0.4, 0, -0.3);
+          this.setE(s, 'foreArmR', -1.9, 0, 0);
+          this.setE(s, 'spine', 0.25, 0, 0);
+          this.setE(s, 'footL', 0.4, 0, 0);
+          this.setE(s, 'footR', 0.6, 0, 0);
+        } else {
+          // Dodge step or a strike in the air: legs gathered under the body.
+          this.setE(s, 'thighL', -0.55, 0, 0.18);
+          this.setE(s, 'shinL', 0.9, 0, 0);
+          this.setE(s, 'thighR', -0.2, 0, -0.18);
+          this.setE(s, 'shinR', 0.7, 0, 0);
+          this.setE(s, 'footL', 0.3, 0, 0);
+          this.setE(s, 'footR', 0.3, 0, 0);
+        }
+        break;
+      }
       case S_ROLL: {
         this.setE(s, 'thighL', -2.1, 0, 0.1);
         this.setE(s, 'thighR', -2.1, 0, -0.1);
@@ -716,6 +781,206 @@ export class CharacterAnimator {
         this.setE(s, 'handR', 0, 0, 0);
         break;
       }
+    }
+  }
+
+  /** Guard: both fists up by the chin, elbows in. */
+  private guardArms(s: number): void {
+    this.setE(s, 'upperArmL', -0.55, 0, 0.32);
+    this.setE(s, 'upperArmR', -0.55, 0, -0.32);
+    this.setE(s, 'foreArmL', -2.05, 0, 0.1);
+    this.setE(s, 'foreArmR', -2.05, 0, -0.1);
+    this.setE(s, 'handL', 0, 0, 0);
+    this.setE(s, 'handR', 0, 0, 0);
+  }
+
+  /**
+   * Combat body motion on the root target: knocked out (falls back flat),
+   * hurt (rocks back), dodge (leans to the dodge side), lunge (leans in).
+   */
+  private combatRoot(state: number, right: Vector3, fwd: Vector3): void {
+    const ca = this.src.combatAnim;
+    let pitch = 0,
+      roll = 0;
+    if (this.lying > 0) pitch -= 1.42 * this.lying;
+    if (ca.action === CA.HURT) pitch -= 0.32 * this.combatW;
+    if (ca.action === CA.DODGE) roll += (ca.side === 1 ? 1 : -1) * 0.42 * this.combatW;
+    if (state === S_COMBAT && ca.action === CA.LUNGE) pitch += 0.35 * this.combatW;
+    if (pitch !== 0) this.rootTarget.premultiply(_q.setFromAxisAngle(right, pitch));
+    if (roll !== 0) this.rootTarget.premultiply(_q.setFromAxisAngle(fwd, roll));
+  }
+
+  /** Set one overlay joint (local Euler, like `setE`). */
+  private ov(joint: JointName, x: number, y: number, z: number): void {
+    _e.set(x, y, z, 'XYZ');
+    const j = J[joint];
+    this.overlay[j]!.setFromEuler(_e);
+    this.overlayMask[j] = true;
+  }
+
+  /**
+   * Combat overlay on the blended pose (before limb collision): punches move
+   * the upper body, kicks one leg and the torso, the knocked-out pose the
+   * whole body. `e` is the strike's extension: out by the contact time, back
+   * over the recovery.
+   */
+  private combatOverlay(action: number, age: number, dur: number, side: number): void {
+    const mask = this.overlayMask;
+    for (let j = 0; j < N; j++) mask[j] = false;
+    const C = tuning.combat;
+    const L = side === 0;
+    const sgn = L ? 1 : -1;
+    const arm = L ? 'L' : 'R';
+    const off = L ? 'R' : 'L';
+    const ext = (contact: number): number => (age < contact ? smoothstep(0, contact, age) : 1 - smoothstep(contact + 0.05, Math.max(contact + 0.1, dur), age));
+    const guardOff = (): void => {
+      this.ov(`upperArm${off}`, -0.55, 0, off === 'L' ? 0.32 : -0.32);
+      this.ov(`foreArm${off}`, -2.05, 0, 0);
+      this.ov(`hand${off}`, 0, 0, 0);
+    };
+    let w = this.combatW;
+    switch (action) {
+      case CA.JAB:
+      case CA.CROSS: {
+        const e = ext(action === CA.JAB ? C.jabContact : C.crossContact);
+        const twist = action === CA.JAB ? 0.35 : 0.6;
+        this.ov(`upperArm${arm}`, -0.55 - 0.95 * e, 0, sgn * (0.32 - 0.2 * e));
+        this.ov(`foreArm${arm}`, -2.05 + 1.95 * e, 0, 0);
+        this.ov(`hand${arm}`, 0, 0, 0);
+        guardOff();
+        this.ov('chest', 0.05, -sgn * twist * e, 0);
+        this.ov('spine', 0.08, -sgn * twist * 0.4 * e, 0);
+        break;
+      }
+      case CA.KICK: {
+        const c = C.kickContact;
+        const chamber = smoothstep(0, c * 0.7, age);
+        const e = ext(c);
+        const leg = L ? 'L' : 'R';
+        this.ov(`thigh${leg}`, -0.6 * chamber - 0.95 * e, 0, sgn * 0.05);
+        this.ov(`shin${leg}`, 1.5 * chamber * (1 - e) + 0.15 * e, 0, 0);
+        this.ov(`foot${leg}`, 0.6 * e, 0, 0);
+        this.ov('upperArmL', -0.55, 0, 0.5);
+        this.ov('upperArmR', -0.55, 0, -0.5);
+        this.ov('foreArmL', -1.9, 0, 0);
+        this.ov('foreArmR', -1.9, 0, 0);
+        this.ov('chest', -0.25 * e, 0, 0);
+        this.ov('spine', -0.1 * e, 0, 0);
+        break;
+      }
+      case CA.UPPER:
+      case CA.TAKEDOWN: {
+        const e = ext(action === CA.UPPER ? C.upperContact : 0.18);
+        this.ov(`upperArm${arm}`, 0.2 - 2.5 * e, 0, sgn * 0.2);
+        this.ov(`foreArm${arm}`, -1.7 + 0.8 * e, 0, 0);
+        this.ov(`hand${arm}`, 0, 0, 0);
+        if (action === CA.TAKEDOWN) {
+          this.ov(`upperArm${off}`, 0.2 - 2.5 * e, 0, -sgn * 0.2);
+          this.ov(`foreArm${off}`, -1.7 + 0.8 * e, 0, 0);
+          this.ov(`hand${off}`, 0, 0, 0);
+        } else guardOff();
+        this.ov('spine', 0.3 - 0.45 * e, -sgn * 0.2 * e, 0);
+        this.ov('chest', 0.15 - 0.3 * e, -sgn * 0.3 * e, 0);
+        break;
+      }
+      case CA.AIR: {
+        // Spinning kick: legs split, arms out.
+        const e = ext(C.jabContact + 0.04);
+        const leg = L ? 'L' : 'R';
+        const other = L ? 'R' : 'L';
+        this.ov(`thigh${leg}`, -1.4 * e - 0.3, 0, sgn * 0.3 * e);
+        this.ov(`shin${leg}`, 0.25, 0, 0);
+        this.ov(`thigh${other}`, 0.4 * e, 0, -sgn * 0.1);
+        this.ov(`shin${other}`, 1.3, 0, 0);
+        this.ov('upperArmL', -0.3, 0, 1.1 * e + 0.3);
+        this.ov('upperArmR', -0.3, 0, -1.1 * e - 0.3);
+        this.ov('foreArmL', -0.4, 0, 0);
+        this.ov('foreArmR', -0.4, 0, 0);
+        this.ov('chest', -0.15, -sgn * 0.7 * e, 0);
+        break;
+      }
+      case CA.GROUND: {
+        // Downward punch on a downed enemy.
+        const e = ext(0.12);
+        this.ov(`upperArm${arm}`, -0.6 - 0.35 * e, 0, sgn * 0.25);
+        this.ov(`foreArm${arm}`, -2.0 + 1.85 * e, 0, 0);
+        this.ov(`hand${arm}`, 0, 0, 0);
+        guardOff();
+        this.ov('spine', 0.35 + 0.45 * e, 0, 0);
+        this.ov('chest', 0.2 + 0.25 * e, -sgn * 0.25 * e, 0);
+        this.ov('head', -0.4 * e, 0, 0);
+        break;
+      }
+      case CA.YANK:
+      case CA.PIN: {
+        // Web shot: reach out (both hands for a pin); a yank then hauls back.
+        const reach = smoothstep(0, 0.08, age);
+        const pull = action === CA.YANK ? smoothstep(0.1, 0.32, age) : 0;
+        const ux = -1.45 * reach * (1 - pull) + 0.35 * pull;
+        const fx = -0.1 * reach * (1 - pull) - 1.9 * pull;
+        this.ov(`upperArm${arm}`, ux, 0, sgn * 0.12);
+        this.ov(`foreArm${arm}`, fx, 0, 0);
+        this.ov(`hand${arm}`, 0.5 * reach, 0, 0);
+        if (action === CA.PIN) {
+          this.ov(`upperArm${off}`, ux, 0, -sgn * 0.12);
+          this.ov(`foreArm${off}`, fx, 0, 0);
+          this.ov(`hand${off}`, 0.5 * reach, 0, 0);
+        }
+        this.ov('chest', -0.05, -sgn * 0.3 * reach * (1 - pull) + sgn * 0.25 * pull, 0);
+        break;
+      }
+      case CA.DODGE: {
+        // Legs gathered (in the air: a tuck; arms keep whatever they hold, the line stays).
+        if (this.src.mode === MODE_STRIKE) {
+          this.ov('thighL', -0.55, 0, 0.25);
+          this.ov('thighR', -0.25, 0, -0.25);
+          this.ov('shinL', 0.9, 0, 0);
+          this.ov('shinR', 0.7, 0, 0);
+          this.ov('spine', 0.25, 0, 0);
+        } else {
+          this.ov('thighL', -1.2, 0, 0.1);
+          this.ov('thighR', -1.1, 0, -0.1);
+          this.ov('shinL', 1.7, 0, 0);
+          this.ov('shinR', 1.6, 0, 0);
+          this.ov('spine', 0.3, 0, 0);
+        }
+        break;
+      }
+      case CA.HURT: {
+        this.ov('spine', -0.2, 0, 0.08);
+        this.ov('chest', -0.22, 0.1, 0);
+        this.ov('head', 0.25, 0, 0);
+        break;
+      }
+      case CA.DOWN:
+      case CA.GETUP: {
+        // Flat on the back, arms out, knees a little up.
+        w = Math.max(w, this.lying);
+        this.ov('upperArmL', -0.25, 0, 1.15);
+        this.ov('upperArmR', -0.25, 0, -1.15);
+        this.ov('foreArmL', -0.35, 0, 0);
+        this.ov('foreArmR', -0.35, 0, 0);
+        this.ov('handL', 0, 0, 0);
+        this.ov('handR', 0, 0, 0);
+        this.ov('thighL', -0.45, 0, 0.12);
+        this.ov('thighR', -0.15, 0, -0.1);
+        this.ov('shinL', 0.8, 0, 0);
+        this.ov('shinR', 0.3, 0, 0);
+        this.ov('footL', 0.4, 0, 0);
+        this.ov('footR', 0.4, 0, 0);
+        this.ov('spine', 0, 0, 0);
+        this.ov('chest', 0, 0, 0);
+        this.ov('head', 0.3, 0.4, 0);
+        break;
+      }
+      default:
+        return;
+    }
+    if (w <= 0.002) return;
+    const b = this.rig.bones;
+    for (let j = 1; j < N; j++) {
+      if (!mask[j]) continue;
+      b[JOINTS[j]!].quaternion.slerp(this.overlay[j]!, w);
     }
   }
 
@@ -774,7 +1039,7 @@ export class CharacterAnimator {
    * legs can reach at the current hip height, so planted feet never slide.
    */
   private gait(dt: number, feetPos: Vector3, hs: number): void {
-    const p = this.player;
+    const p = this.src;
     const moving = hs > 0.6;
     this.gaitFrame++;
     this.gaitDrop += ((moving ? 0.05 + 0.09 * smoothstep(3, 16, hs) : 0) - this.gaitDrop) * dampFactor(10, dt);
@@ -939,13 +1204,13 @@ export class CharacterAnimator {
   }
 
   private groundAt(x: number, y: number, z: number): number {
-    const g = this.player.groundBelow(x, y, z);
+    const g = this.src.groundBelow(x, y, z);
     return g > -1e6 ? g : y;
   }
 
   /** Wall cling and crawl: hands and feet on the wall plane in a diagonal gait. */
   private wallPose(s: number, feetPos: Vector3, dt: number): void {
-    const p = this.player;
+    const p = this.src;
     const b = this.rig.bones;
     const n = _v2.set(p.wall.nx, 0, p.wall.nz);
     const rightW = _right.set(-n.z, 0, n.x); // along the wall
@@ -1028,4 +1293,11 @@ export class CharacterAnimator {
   bone(name: JointName): Bone {
     return this.rig.bones[name];
   }
+}
+
+/** Weight of a combat overlay action `age` seconds in, `dur` long: in over CW_IN, out over CW_OUT after its end. */
+function combatOverlayWeight(action: number, age: number, dur: number): number {
+  if (action === CA.NONE || age < 0) return 0;
+  const win = Math.min(1, age / CW_IN);
+  return age <= dur ? win : win * Math.max(0, 1 - (age - dur) / CW_OUT);
 }

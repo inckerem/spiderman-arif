@@ -34,6 +34,7 @@ import {
 } from './testDrivers';
 import { makeAnchorResult } from '../player/targeting';
 import { ES_NAMES, type EnemyKind } from '../combat/types';
+import { combatComboTest, combatDodgeTest, combatLineTest, combatRoutingTest } from './combatDrivers';
 
 declare global {
   interface Window {
@@ -262,6 +263,22 @@ export function installTestApi(game: Game, app?: App): void {
         game.combatSim.scheduler = on;
         game.combatSim.roaming = on;
       },
+      /** Point the crosshair at an enemy's chest. */
+      aimAt(id: number): boolean {
+        const e = game.combatView.enemy(id);
+        if (!e) return false;
+        aimAt(game, e.x, e.y + 1.1, e.z);
+        return true;
+      },
+      /** The hero's side: router counters, mode, combat animation, knocked out. */
+      hero(): Record<string, unknown> {
+        const p = game.player;
+        return { stats: { ...game.heroCombat.stats }, hud: { ...game.heroCombat.hud, threat: null }, mode: MODE_NAMES[p.mode], strike: { ...p.strike }, anim: { ...p.combatAnim }, down: p.down };
+      },
+      routingTest: () => combatRoutingTest(game),
+      comboTest: () => combatComboTest(game),
+      lineTest: () => combatLineTest(game),
+      dodgeTest: () => combatDodgeTest(game),
       /** Own combat state and the recent combat events (room time, event). */
       state(): Record<string, unknown> {
         const v = game.combatView;
