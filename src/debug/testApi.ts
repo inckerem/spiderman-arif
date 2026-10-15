@@ -31,6 +31,7 @@ import {
 } from './testDrivers';
 import { goldenDigest } from './golden';
 import { terrainSelfTest } from './terrainSelfTest';
+import { landmarkTunnelTest } from './landmarkTests';
 import { mapSwitchUrl } from '../maps/select';
 import { getMap } from '../maps/registry';
 import { buildCollisionWorld } from '../world/cityCollision';
@@ -165,6 +166,8 @@ export function installTestApi(game: Game, app?: App): void {
     ringTest: () => ringTest(game),
     soakMinute: (minute: number) => soakMinute(game, app, minute),
     tunnelTest: (trials = 300) => tunnelTest(game, trials),
+    /** 95 m/s impacts into landmark and bridge parts: minarets, towers, cable chains (M13). */
+    landmarkTunnelTest: (trials = 300) => landmarkTunnelTest(game, trials),
     lifeTest: () => lifeTest(game),
     /** Attract mode headless (dev-only hook; the real loop never runs it in manual mode). */
     attractTest: (seconds = 240, seed = 1) => attractTest(game, seconds, seed),

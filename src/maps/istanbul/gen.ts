@@ -46,6 +46,8 @@ import {
 } from './data';
 import { bsp, clipPolyline, isoLines, largestValidRect, sampleField, type GridField } from './streets';
 import { bakeIstanbulHeights, distanceField } from './terrain';
+import { buildIstanbulParts, partFootprints } from './landmarks';
+import type { Part } from '../common/prims';
 
 /** Sidewalk between the curb and the building fronts (m). */
 const SIDEWALK = 3;
@@ -88,6 +90,17 @@ function districtAt(x: number, z: number): DistrictSpec {
 
 /** Per-layout terrain (generation builds it once; rebuilt from the layout data when missing). */
 const TERRAINS = new WeakMap<CityLayout, HeightfieldTerrain>();
+/** Per-layout landmark and bridge parts (colliders and greybox geometry). */
+const PARTS = new WeakMap<CityLayout, Part[]>();
+
+export function istanbulParts(L: CityLayout): Part[] {
+  const cached = PARTS.get(L);
+  if (cached) return cached;
+  const t = istanbulTerrain(L);
+  const parts = buildIstanbulParts((x, z) => t.baseHeight(x, z), (x, z) => t.roads.isRoad(x, z));
+  PARTS.set(L, parts);
+  return parts;
+}
 
 export function istanbulTerrain(L: CityLayout): HeightfieldTerrain {
   const cached = TERRAINS.get(L);
@@ -402,7 +415,7 @@ export function generateIstanbul(seed: number): CityLayout {
   }
 
   // --- Plazas: landmark sites (paved, raised) ---
-  const plazas: Rect[] = LANDMARKS.filter((l) => !l.passable).map((l) => ({ ...l.rect }));
+  const plazas: Rect[] = LANDMARKS.filter((l) => !l.passable && !l.id.startsWith('halic')).map((l) => ({ ...l.rect }));
   const raised = new RectIndex([...blocks, ...plazas, ...parkRects], E);
   const groundY = (x: number, z: number): number => base(x, z) + (raised.contains(x, z) ? CURB : 0);
   const blockIdx = new RectIndex(blocks, E);
@@ -422,7 +435,16 @@ export function generateIstanbul(seed: number): CityLayout {
       }
     }
   }
-  const parkTrees = trees.length;
+  // Plane trees in Topkapı's first court and along the Hippodrome.
+  for (let z = 226; z < 432; z += rng.range(11, 14)) {
+    for (let x = 160; x < 197; x += rng.range(11, 14)) {
+      if (z > 280 && z < 320) continue;
+      trees.push(makeTree(rng, rng.chance(0.5) ? TREE_OAK : TREE_MAPLE, x, z, groundY(x, z), rng.range(17, 24), true));
+    }
+  }
+  for (let z = 408; z < 616; z += 15) {
+    for (const x of [-45, 5]) trees.push(makeTree(rng, TREE_OAK, x, z, groundY(x, z), rng.range(12, 16), true));
+  }
   // Street trees on the sidewalks of the arterials.
   for (const r of roads) {
     if (r.cls !== 2) continue;
@@ -462,6 +484,13 @@ export function generateIstanbul(seed: number): CityLayout {
 
   const piers: Pier[] = PIERS.map((p) => ({ ...p, top: CURB }));
 
+  // Landmarks and bridges; trees and lamps keep clear of them.
+  const parts = buildIstanbulParts(base, (x, z) => roadIdx.isRoad(x, z));
+  const partIdx = new RectIndex(partFootprints(parts).map((r) => grow(r, 0.8)), E);
+  const clearTrees = trees.filter((t) => !partIdx.contains(t.x, t.z) && !partIdx.contains(t.x + t.rx * 0.6, t.z) && !partIdx.contains(t.x - t.rx * 0.6, t.z) && !partIdx.contains(t.x, t.z + t.rx * 0.6) && !partIdx.contains(t.x, t.z - t.rx * 0.6));
+  const parkTreesKept = clearTrees.filter((t) => t.park).length;
+  const clearProps = props.filter((p) => !partIdx.contains(p.x, p.z));
+
   // Spawn on a low roof near Eminönü, looking over the old city.
   const buildings = ctx.buildings;
   let spawn: [number, number, number] = [0, groundY(0, 250) + 0.1, 250];
@@ -495,8 +524,8 @@ export function generateIstanbul(seed: number): CityLayout {
     blocks,
     plazas,
     buildings,
-    trees,
-    props,
+    trees: clearTrees,
+    props: clearProps,
     parkWalls: [],
     railings: [],
     piers,
@@ -505,8 +534,8 @@ export function generateIstanbul(seed: number): CityLayout {
     spawn,
     stats: {
       buildings: buildings.length,
-      parkTrees,
-      streetTrees: trees.length - parkTrees,
+      parkTrees: parkTreesKept,
+      streetTrees: clearTrees.length - parkTreesKept,
       maxHeight: buildings.reduce((m, b) => Math.max(m, b.height), 0),
     },
     roads,
@@ -515,6 +544,7 @@ export function generateIstanbul(seed: number): CityLayout {
     landmarks: LANDMARKS.map((l) => ({ id: l.id, rect: { ...l.rect } })),
   };
   TERRAINS.set(layout, makeTerrain(layout, grid, mask));
+  PARTS.set(layout, parts);
   return layout;
 }
 

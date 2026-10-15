@@ -5,7 +5,8 @@ import { waterMaterial } from '../../render/materials';
 import { buildHeightfieldGround } from '../../world/render/terrainGeo';
 import type { CityLayout } from '../../world/types';
 import type { MapVisuals, WaterVisuals } from '../renderTypes';
-import { istanbulTerrain } from './gen';
+import { istanbulParts, istanbulTerrain } from './gen';
+import { drawParts } from '../common/partsGeo';
 import { istanbulMinimapExtent, paintIstanbulMinimap } from './minimap';
 
 /** The sea: one plane (shore foam comes with the signed-distance water in a later step). */
@@ -41,7 +42,7 @@ function buildBackdrop(L: CityLayout): GeomBuilder {
 }
 
 export const ISTANBUL_VISUALS: MapVisuals = {
-  buildExtras: () => undefined,
+  buildExtras: (L, getChunk) => drawParts(istanbulParts(L), getChunk),
   ground: (L) => buildHeightfieldGround(L, istanbulTerrain(L)),
   water: buildWater,
   backdrop: buildBackdrop,

@@ -65,5 +65,31 @@ test('istanbul: collision fuzz on the hills', async ({ page }) => {
   expect(total.nan).toBe(0);
   expect(total.stuckOver3s).toBe(0);
   expect(total.cameraInside).toBe(0);
+  // Simulation budget with the landmark and bridge colliders.
+  expect(total.msPerTick).toBeLessThanOrEqual(1);
+  expectClean(problems);
+});
+
+// (b2) on Istanbul: 95 m/s head-on into thin posts and walls, then into the
+// landmark parts (minarets, towers, cable chains of the bridges).
+test('istanbul: no tunnelling at 95 m/s, landmarks included', async ({ page }) => {
+  const problems = await openGame(page, '/?harita=istanbul');
+  const r = await page.evaluate(() => {
+    const g = (window as any).__game;
+    g.game.animateManual = false;
+    const generic = g.tunnelTest(400);
+    const landmarks = g.landmarkTunnelTest(400);
+    return { generic, landmarks, colliders: g.layoutStats().colliders };
+  });
+  saveResult('istanbul-tunnel', r);
+  console.log('istanbul tunnel', JSON.stringify(r));
+  expect(r.generic.tried).toBe(400);
+  expect(r.generic.tunneled).toBe(0);
+  expect(r.generic.insideTicks).toBe(0);
+  expect(r.landmarks.tried).toBe(400);
+  expect(r.landmarks.cylinders).toBeGreaterThan(50);
+  expect(r.landmarks.cables).toBeGreaterThan(50);
+  expect(r.landmarks.tunneled).toBe(0);
+  expect(r.landmarks.insideTicks).toBe(0);
   expectClean(problems);
 });

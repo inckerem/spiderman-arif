@@ -3,7 +3,8 @@ import type { TerrainModel } from '../../physics/terrain';
 import type { CityLayout } from '../../world/types';
 import { WP_PARK, WP_ROOF, WP_WATERFRONT, type MapDefinition, type Waypoint, type XZ } from '../types';
 import { IST_EXTENT, PENINSULA, EUROPE_N, ASIA } from './data';
-import { generateIstanbul, istanbulTerrain } from './gen';
+import { generateIstanbul, istanbulParts, istanbulTerrain } from './gen';
+import { addPartColliders } from '../common/prims';
 
 /** Point-in-polygon (even-odd). */
 function inPoly(p: ReadonlyArray<readonly [number, number]>, x: number, z: number): boolean {
@@ -100,7 +101,7 @@ export const ISTANBUL: MapDefinition = {
   collisionExtent: IST_EXTENT,
   generate: generateIstanbul,
   createTerrain: istanbulTerrain,
-  addColliders: () => undefined,
+  addColliders: (w, L) => addPartColliders(w, istanbulParts(L)),
   testSpots: {
     // Anywhere on land inside the core bounds, at street level.
     street: (rng: Rng, L: CityLayout, t: TerrainModel) => {

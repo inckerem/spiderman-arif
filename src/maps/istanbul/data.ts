@@ -119,7 +119,9 @@ export type LandmarkId =
   | 'mihrimah'
   | 'semsiPasa'
   | 'bridgeWestAnchorage'
-  | 'bridgeEastAnchorage';
+  | 'bridgeEastAnchorage'
+  | 'halicSouth'
+  | 'halicNorth';
 
 export interface LandmarkSite {
   id: LandmarkId;
@@ -150,6 +152,9 @@ export const LANDMARKS: LandmarkSite[] = [
   { id: 'semsiPasa', rect: { minX: 652, maxX: 668, minZ: 162, maxZ: 178 }, coastal: true },
   { id: 'bridgeWestAnchorage', rect: { minX: 282, maxX: 318, minZ: -764, maxZ: -716 } },
   { id: 'bridgeEastAnchorage', rect: { minX: 972, maxX: 1000, minZ: -764, maxZ: -716 } },
+  // Haliç Metro Bridge approaches: the south deck runs on into the hill (streets pass under), the north end ramps down.
+  { id: 'halicSouth', rect: { minX: -285, maxX: -265, minZ: 36, maxZ: 140 }, passable: true },
+  { id: 'halicNorth', rect: { minX: -285, maxX: -265, minZ: -215, maxZ: -122 } },
 ];
 
 export interface ParkSite {
@@ -168,11 +173,11 @@ export const PARKS: ParkSite[] = [
 
 /** Piers and quays over the water (top at curb height). */
 export const PIERS: Rect[] = [
-  { minX: 140, maxX: 160, minZ: -150, maxZ: -98 },
-  { minX: 190, maxX: 206, minZ: -146, maxZ: -102 },
+  { minX: 140, maxX: 160, minZ: -104, maxZ: -62 },
+  { minX: 190, maxX: 206, minZ: -108, maxZ: -70 },
   { minX: -132, maxX: -112, minZ: 36, maxZ: 74 },
   { minX: -190, maxX: -172, minZ: 22, maxZ: 62 },
-  { minX: 300, maxX: 318, minZ: -330, maxZ: -150 },
+  { minX: 314, maxX: 330, minZ: -300, maxZ: -160 },
   { minX: 618, maxX: 664, minZ: 22, maxZ: 38 },
   { minX: 300, maxX: 318, minZ: 150, maxZ: 168 },
 ];
