@@ -538,6 +538,7 @@ export function generateIstanbul(seed: number): CityLayout {
       streetTrees: clearTrees.length - parkTreesKept,
       maxHeight: buildings.reduce((m, b) => Math.max(m, b.height), 0),
     },
+    sidewalk: SIDEWALK,
     roads,
     landPolygons: LAND_POLYGONS.map((p) => p.map((q) => [q[0], q[1]] as [number, number])),
     parks: parkRects.map((r) => ({ ...r })),

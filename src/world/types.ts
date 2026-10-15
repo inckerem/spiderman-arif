@@ -199,6 +199,8 @@ export interface CityLayout {
   /** Spawn point on a sidewalk. */
   spawn: [number, number, number];
   stats: { buildings: number; parkTrees: number; streetTrees: number; maxHeight: number };
+  /** Sidewalk width between the curb and the building fronts (m); 5 when absent (Manhattan). */
+  sidewalk?: number;
   /** Maps without a street grid: road centre lines with widths (Istanbul). */
   roads?: RoadPiece[];
   /** Land polygons (water is everything outside them). */
