@@ -36,9 +36,12 @@ import { RingRaces } from './extras/rings';
 import { AttractMode } from './extras/attractMode';
 import { Rain } from './fx/rain';
 import { clearShot } from './camera/director';
+import type { MapId } from './maps/ids';
 
 export interface GameOptions {
   seed: number;
+  /** Map to build (src/maps/ids.ts). */
+  mapId: MapId;
   canvas: HTMLCanvasElement;
   onProgress?: (fraction: number, label: string) => void;
 }
@@ -130,6 +133,11 @@ export class Game {
   onPlayerEvent: ((e: PlayerEvent) => void) | null = null;
   /** Fixed camera pose for screenshots (tests/photo checks). */
   cameraOverride: { x: number; y: number; z: number; tx: number; ty: number; tz: number; fov: number } | null = null;
+
+  /** The map this game was built for (a map switch reloads the page). */
+  get mapId(): MapId {
+    return this.opts.mapId;
+  }
 
   constructor(private readonly opts: GameOptions) {
     stableShadowSampling();

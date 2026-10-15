@@ -30,6 +30,7 @@ import {
   type BotInput,
 } from './testDrivers';
 import { goldenDigest } from './golden';
+import { mapSwitchUrl } from '../maps/select';
 
 declare global {
   interface Window {
@@ -44,6 +45,7 @@ export function installTestApi(game: Game, app?: App): void {
   const api = {
     ready: true,
     game,
+    mapId: game.mapId,
     tuning,
     app,
     setManual(on: boolean): void {
@@ -170,6 +172,8 @@ export function installTestApi(game: Game, app?: App): void {
     updateLife: (dt = 1 / 60) => game.updateLife(dt),
     /** Hash of layout, colliders and deterministic driver outputs (M13 refactor gate). */
     goldenDigest: (attractSeconds = 120) => goldenDigest(game, attractSeconds),
+    /** The URL a map switch reloads to. */
+    mapUrl: (id: string) => mapSwitchUrl(location.href, id as Parameters<typeof mapSwitchUrl>[1]),
     simTiming(): { msPerTick: number; ticks: number } {
       return { msPerTick: game.simTimeMs / Math.max(1, game.simTicksMeasured), ticks: game.simTicksMeasured };
     },

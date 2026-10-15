@@ -7,6 +7,7 @@
 
 import { DEFAULT_BINDINGS, sanitizeBindings, type Bindings } from '../input/bindings';
 import { DEFAULT_COSTUME, isCostumeId, type CostumeId } from '../character/costumes';
+import { DEFAULT_MAP, isMapId, type MapId } from '../maps/ids';
 
 export interface Settings {
   /** 0 Low, 1 Medium, 2 High, 3 Ultra. */
@@ -32,6 +33,8 @@ export interface Settings {
   bindings: Bindings;
   /** Hero costume (src/character/costumes.ts). */
   costume: CostumeId;
+  /** Map to boot (src/maps/ids.ts); `?harita=` in the URL overrides it. */
+  map: MapId;
 }
 
 export const SETTINGS_KEY = 'skythread.settings.v1';
@@ -67,6 +70,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze<Settings>({
   showFps: false,
   bindings: DEFAULT_BINDINGS,
   costume: DEFAULT_COSTUME,
+  map: DEFAULT_MAP,
 });
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -116,6 +120,7 @@ export function sanitizeSettings(data: unknown): Settings {
     showFps: boolOr(o.showFps, d.showFps),
     bindings: sanitizeBindings(o.bindings),
     costume: isCostumeId(o.costume) ? o.costume : d.costume,
+    map: isMapId(o.map) ? o.map : d.map,
   };
 }
 

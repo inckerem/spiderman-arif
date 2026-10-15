@@ -8,6 +8,7 @@ import { MODE_SWING, MODE_ZIP, type PlayerEvent } from './player/player';
 import type { Action } from './input/bindings';
 import { RooftopMoment } from './extras/rooftopMoment';
 import { tuning } from './config/tuning';
+import { DEFAULT_MAP, type MapId } from './maps/ids';
 
 export type AppState = 'loading' | 'menu' | 'playing' | 'paused' | 'photo';
 
@@ -67,9 +68,9 @@ export class App {
     this.audio = new AudioEngine(`${import.meta.env.BASE_URL}audio/theme.mp3`);
   }
 
-  async boot(seed: number): Promise<void> {
+  async boot(seed: number, mapId: MapId = DEFAULT_MAP): Promise<void> {
     const ui = this.ui;
-    this.game = new Game({ seed, canvas: this.canvas, onProgress: (f, label) => ui.setLoading(f, label) });
+    this.game = new Game({ seed, mapId, canvas: this.canvas, onProgress: (f, label) => ui.setLoading(f, label) });
     const game = this.game;
     await game.init();
     ui.setLayout(game.layout);

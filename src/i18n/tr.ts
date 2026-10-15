@@ -78,6 +78,21 @@ export const tr = {
       blackWhite: 'Siyah-Beyaz',
     },
   },
+  maps: {
+    title: 'Harita',
+    menu: 'Harita',
+    names: {
+      manhattan: 'Manhattan',
+      istanbul: 'İstanbul',
+    },
+    desc: {
+      manhattan: 'Izgara sokaklar, gökdelenler ve büyük park',
+      istanbul: 'Tepeler, camiler, köprüler ve Boğaz',
+    },
+    soon: 'Yakında',
+    hint: 'Başka bir harita seçince oyun yeniden yüklenir.',
+    loading: 'Harita yükleniyor…',
+  },
   bindings: {
     title: 'Tuş Atamaları',
     settingLabel: 'Tuş atamaları',
