@@ -30,6 +30,7 @@ import {
   type BotInput,
 } from './testDrivers';
 import { goldenDigest } from './golden';
+import { terrainSelfTest } from './terrainSelfTest';
 import { mapSwitchUrl } from '../maps/select';
 
 declare global {
@@ -172,6 +173,8 @@ export function installTestApi(game: Game, app?: App): void {
     updateLife: (dt = 1 / 60) => game.updateLife(dt),
     /** Hash of layout, colliders and deterministic driver outputs (M13 refactor gate). */
     goldenDigest: (attractSeconds = 120) => goldenDigest(game, attractSeconds),
+    /** Heightfield terrain, water mask and road index checks (Istanbul data). */
+    terrainSelfTest: (rays = 20000, points = 100000) => terrainSelfTest(rays, points),
     /** The URL a map switch reloads to. */
     mapUrl: (id: string) => mapSwitchUrl(location.href, id as Parameters<typeof mapSwitchUrl>[1]),
     simTiming(): { msPerTick: number; ticks: number } {
