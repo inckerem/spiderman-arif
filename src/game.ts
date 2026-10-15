@@ -36,6 +36,14 @@ import { RingRaces } from './extras/rings';
 import { AttractMode } from './extras/attractMode';
 import { Rain } from './fx/rain';
 import { clearShot } from './camera/director';
+import { CombatSim } from './combat/combatSim';
+import { buildSpawnPoints, type SpawnPoints } from './combat/spawnPoints';
+import { CombatView } from './combat/client/combatView';
+import { LocalCombatLink } from './combat/client/localLink';
+import { makeHeroState } from './combat/client/link';
+import { fillHeroState } from './combat/client/heroState';
+import { DebugCapsules } from './combat/render/debugCapsules';
+import type { CombatEvent } from './combat/types';
 
 export interface GameOptions {
   seed: number;
@@ -128,6 +136,24 @@ export class Game {
   onHourKey: (() => void) | null = null;
   /** Called for every simulation event (audio, HUD). */
   onPlayerEvent: ((e: PlayerEvent) => void) | null = null;
+  /** Arenas and patrol loops for the combat sim (built once from the layout). */
+  spawns!: SpawnPoints;
+  /** Single player's combat room: the pure sim, stepped at 30 Hz through the local link. */
+  combatSim!: CombatSim;
+  combatLink!: LocalCombatLink;
+  /** What the client knows about combat (the link's messages): enemies, own health, threats. */
+  combatView!: CombatView;
+  /** Temporary enemy visuals (chunk 5 brings the rigs). */
+  combatCapsules!: DebugCapsules;
+  /**
+   * Combat runs while playing. Manual test mode turns it off (so the movement
+   * specs' numbers never see it) unless a test switches it on.
+   */
+  combatEnabled = true;
+  private readonly heroSample = makeHeroState();
+  private readonly combatEvents: CombatEvent[] = [];
+  /** Called for every combat event this client receives (audio, HUD). */
+  onCombatEvent: ((e: CombatEvent) => void) | null = null;
   /** Fixed camera pose for screenshots (tests/photo checks). */
   cameraOverride: { x: number; y: number; z: number; tx: number; ty: number; tz: number; fov: number } | null = null;
 
@@ -181,13 +207,18 @@ export class Game {
     this.attract = new AttractMode(this.world, this.layout, this.hero, this.opts.seed);
     this.attract.onEvent = (e) => this.fxEvent(e, this.attract.player);
     this.rain = new Rain(this.opts.seed);
+    this.spawns = buildSpawnPoints(this.layout, this.world);
+    this.combatSim = new CombatSim(this.world, this.layout, this.spawns, this.opts.seed, { pvp: false, maxEnemies: tuning.events.maxEnemiesSp });
+    this.combatView = new CombatView();
+    this.combatLink = new LocalCombatLink(this.combatSim, this.combatView);
+    this.combatCapsules = new DebugCapsules(tuning.events.maxEnemiesSp);
     this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
     p(0.88, 'shaders');
     this.sky = new Sky(this.opts.seed);
     this.scene.add(this.sky.group);
     this.scene.add(this.visuals.group);
-    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh, this.traffic.mesh, this.peds.mesh, this.rings.mesh, this.rain.mesh);
+    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh, this.traffic.mesh, this.peds.mesh, this.rings.mesh, this.rain.mesh, this.combatCapsules.mesh);
     this.scene.fog = new Fog(0xb4dbf6, 300, 2000);
     this.sun = new DirectionalLight(0xffffff, 2.4);
     this.sun.castShadow = true;
@@ -247,6 +278,7 @@ export class Game {
     this.animator.perch = 0;
     this.web.release();
     this.rings.abandon();
+    this.resetCombat();
     this.cineOrbit = 0;
     this.view = 'play';
     // Pose the hero and the camera at the spawn right away (the frame holds still until the pointer lock).
@@ -333,6 +365,35 @@ export class Game {
       this.onPlayerEvent?.(e);
     }
     if (this.eventLog.length > 200) this.eventLog.splice(0, this.eventLog.length - 200);
+    if (this.combatEnabled) this.stepCombat(dt);
+  }
+
+  /** Upload the hero to the combat room, advance it (30 Hz inside), sample the view and handle what arrived. */
+  private stepCombat(dt: number): void {
+    const link = this.combatLink;
+    link.tick(dt, fillHeroState(this.player, false, this.heroSample));
+    this.combatView.update(link.now(), link.renderTime());
+    const evs = this.combatEvents;
+    evs.length = 0;
+    this.combatView.drainEvents(evs);
+    for (const e of evs) {
+      if (e.e === 'respawn' && e.pid === link.selfPid) {
+        // Knocked out earlier: back on a roof (the room picked it).
+        this.player.teleport(e.x, e.y, e.z);
+        this.prevPos.copy(this.player.pos);
+        this.rig.snap();
+      }
+      this.onCombatEvent?.(e);
+    }
+  }
+
+  /** A fresh combat room: no enemies, full health (a new game, tests). */
+  resetCombat(): void {
+    const link = this.combatLink;
+    this.combatSim.debugClear();
+    this.combatSim.removeHero(link.selfPid);
+    this.combatView.reset();
+    this.combatCapsules.update(this.combatView, 0);
   }
 
   /** Visual effects triggered by simulation events (of the game's player or the attract hero). */
@@ -534,6 +595,9 @@ export class Game {
   /** Render one frame through the post pipeline and record renderer stats. */
   renderFrame(dt: number): void {
     this.time += dt;
+    // Enemies show in play (and photos of it), not behind the menu.
+    this.combatCapsules.mesh.visible = this.view !== 'menu';
+    if (this.view !== 'menu') this.combatCapsules.update(this.combatView, this.combatLink.now());
     shared.uTime.value = this.time;
     const wx = this.weather;
     this.dayNight.storm = wx.mood;
