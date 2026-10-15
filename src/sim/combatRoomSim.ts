@@ -10,7 +10,7 @@ import { tuning } from '../config/tuning';
 import { CombatSim } from '../combat/combatSim';
 import { kindInfo } from '../combat/roster';
 import { ENEMY_KIND_COUNT, HERO_ID_BASE, type EnemyKind } from '../combat/types';
-import type { CombatEvent, CombatIntent, CrimeEventInfo, DebugOp, EnemySnap, HeroState, MapRuntime, RoomSim, RoomSimFactory, RoomSimOptions } from './types';
+import type { CombatEvent, CombatIntent, CrimeEventInfo, DebugOp, EnemySnap, HeroCombatSnap, HeroState, MapRuntime, RoomSim, RoomSimFactory, RoomSimOptions } from './types';
 
 const CRIME_TYPES: ReadonlyArray<CrimeEventInfo['type']> = ['robbery', 'gang', 'drones', 'boss'];
 /** A server-issued respawn point stays a valid teleport target this long (s of sim time). */
@@ -100,6 +100,20 @@ export class CombatRoomSim implements RoomSim {
       s.target = e.target >= HERO_ID_BASE ? e.target - HERO_ID_BASE : 0;
     }
     return n;
+  }
+
+  selfSnap(pid: number, out: HeroCombatSnap): boolean {
+    const h = this.sim.hero(pid);
+    if (!h) return false;
+    out.hp = h.hp;
+    out.maxHp = h.maxHp;
+    out.down = h.down;
+    out.downUntil = h.downUntil;
+    out.combo = h.combo;
+    out.comboUntil = h.comboUntil;
+    out.focus = h.focus;
+    out.iframesUntil = h.iframesUntil;
+    return true;
   }
 
   crimeEvents(out: CrimeEventInfo[]): void {

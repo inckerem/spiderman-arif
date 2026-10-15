@@ -5,12 +5,16 @@
  *
  * Hero state body (opcode 0x01 follows with this; each 0x02 entry is u8 pid + this):
  *   u16 seq, u32 tMs, f32 x,y,z, i16 vx,vy,vz (×100), u16 facing, u8 mode,
- *   u8 flags (HF), u8 blocks (HB), u8 tp, u8 action, u8 actionT (×100)        = 32 B
+ *   u8 flags (HF), u8 blocks (HB), u8 tp, u8 action, u8 actionSide,
+ *   u8 actionT (×100), u8 actionDur (×100)                                    = 34 B
  *   [HB.ANCHOR f32×3] [HB.ZIP f32×3] [HB.WALL i8 nx, i8 nz, u8 run ×10] [HB.TRAV u8 kind, u8 t ×100, u8 dur ×100]
  *   u8 nEvents, events (u8 code + payload)
  * Enemy snapshot (0x03): u32 roomMs, u8 count, per enemy 18 B:
  *   u16 id, u8 kind, u8 state, i16 x (×20), i16 y (×50), i16 z (×20), u16 yaw,
  *   u8 hp (×255), u8 guard (×255), u8 anim, u8 animT (×50), u8 flags, u8 target
+ *   then u8 hasSelf and, when 1, the receiver's own combat state (21 B):
+ *   u16 hp ×10, u16 maxHp ×10, u8 down, i32 downUntil, u16 combo, i32 comboUntil,
+ *   u16 focus ×10, i32 iframesUntil (times: ms relative to roomMs)
  *
  * PURE: no DOM, no Node APIs.
  */
@@ -28,11 +32,11 @@ import {
   type ServerMsg,
 } from './protocol';
 import { isMapId } from './maps';
-import { DEBUG_OPS, type CombatIntent, type EnemySnap } from '../sim/types';
+import { DEBUG_OPS, type CombatIntent, type EnemySnap, type HeroCombatSnap } from '../sim/types';
 
 const TAU = Math.PI * 2;
 const ENEMY_BYTES = 18;
-const STATE_FIXED = 32;
+const STATE_FIXED = 34;
 const STATE_T_OFFSET = 2; // tMs inside the body
 
 // ---------------------------------------------------------------------------
@@ -86,6 +90,11 @@ export class ByteWriter {
     this.dv.setInt16(this.len, v, true);
     this.len += 2;
   }
+  i32w(v: number): void {
+    this.need(4);
+    this.dv.setInt32(this.len, v | 0, true);
+    this.len += 4;
+  }
   u32w(v: number): void {
     this.need(4);
     this.dv.setUint32(this.len, v >>> 0, true);
@@ -135,7 +144,7 @@ export const u16ToAngle = (v: number): number => {
 export const NE = {
   jump: 1, land: 2, webFire: 3, attach: 4, release: 5, boost: 6, dive: 7, zipStart: 8, zipEnd: 9,
   wallGrab: 10, wallJump: 11, vault: 12, mantle: 13, splash: 14, respawn: 15, recover: 16,
-  strike: 17, dodge: 18, hurt: 19, down: 20, revive: 21,
+  strike: 17, dodge: 18, hurt: 19, down: 20, revive: 21, lunge: 22, lungeEnd: 23,
 } as const satisfies Record<NetEvent['type'], number>;
 
 const NE_NAMES: Array<NetEvent['type'] | undefined> = [];
@@ -179,6 +188,9 @@ function writeEvent(w: ByteWriter, e: NetEvent): void {
       break;
     case 'strike':
       w.u8w(clampInt(e.move, 0, 255));
+      break;
+    case 'lungeEnd':
+      w.u8w(e.ok ? 1 : 0);
       break;
     case 'hurt':
       w.u8w(clampInt(e.dmg, 0, 255));
@@ -241,6 +253,10 @@ function readEvent(dv: DataView, o: number, end: number, out: NetEvent[]): numbe
       if (!need(1)) return -1;
       out.push({ type, move: dv.getUint8(o) });
       return o + 1;
+    case 'lungeEnd':
+      if (!need(1)) return -1;
+      out.push({ type, ok: dv.getUint8(o) !== 0 });
+      return o + 1;
     case 'hurt':
       if (!need(1)) return -1;
       out.push({ type, dmg: dv.getUint8(o) });
@@ -271,7 +287,9 @@ export function writeHeroBody(w: ByteWriter, s: HeroSample): void {
   w.u8w(blocks);
   w.u8w(s.tp & 0xff);
   w.u8w(s.action & 0xff);
+  w.u8w(s.actionSide & 0xff);
   w.u8w(q8(finiteOr0(s.actionT), 100));
+  w.u8w(q8(finiteOr0(s.actionDur), 100));
   if (blocks & HB.ANCHOR) {
     w.f32w(s.ax);
     w.f32w(s.ay);
@@ -319,7 +337,9 @@ export function readHeroBody(dv: DataView, o: number, end: number, out: HeroSamp
   out.blocks = blocks;
   out.tp = dv.getUint8(o + 29);
   out.action = dv.getUint8(o + 30);
-  out.actionT = dv.getUint8(o + 31) / 100;
+  out.actionSide = dv.getUint8(o + 31);
+  out.actionT = dv.getUint8(o + 32) / 100;
+  out.actionDur = dv.getUint8(o + 33) / 100;
   o += STATE_FIXED;
   if (blocks & HB.ANCHOR) {
     if (o + 12 > end) return -1;
@@ -429,7 +449,16 @@ export function cloneHeroSample(s: HeroSample, out: HeroSample = makeHeroSample(
 // ---------------------------------------------------------------------------
 // Enemy snapshot
 
-export function encodeEnemySnapshot(roomMs: number, snaps: readonly EnemySnap[], count: number, w: ByteWriter): Uint8Array {
+const SELF_BYTES = 21;
+const I32_MIN = -2147483648;
+const I32_MAX = 2147483647;
+const relMs = (tS: number, roomMs: number): number => clampInt(finiteOr0(tS) * 1000 - roomMs, I32_MIN, I32_MAX);
+
+/**
+ * S→C enemy snapshot (0x03): the nearest enemies and, when `self` is given,
+ * the receiver's own combat state (times in room seconds).
+ */
+export function encodeEnemySnapshot(roomMs: number, snaps: readonly EnemySnap[], count: number, w: ByteWriter, self: HeroCombatSnap | null = null): Uint8Array {
   w.reset();
   w.u8w(OP_ENEMIES);
   w.u32w(Math.max(0, Math.round(roomMs)));
@@ -451,19 +480,40 @@ export function encodeEnemySnapshot(roomMs: number, snaps: readonly EnemySnap[],
     w.u8w(e.flags & 0xff);
     w.u8w(e.target & 0xff);
   }
+  w.u8w(self ? 1 : 0);
+  if (self) {
+    const base = Math.max(0, Math.round(roomMs));
+    w.u16w(clampInt(finiteOr0(self.hp) * 10, 0, 65535));
+    w.u16w(clampInt(finiteOr0(self.maxHp) * 10, 0, 65535));
+    w.u8w(self.down ? 1 : 0);
+    w.i32w(relMs(self.downUntil, base));
+    w.u16w(clampInt(self.combo, 0, 65535));
+    w.i32w(relMs(self.comboUntil, base));
+    w.u16w(clampInt(finiteOr0(self.focus) * 10, 0, 65535));
+    w.i32w(relMs(self.iframesUntil, base));
+  }
   return w.finish();
 }
 
 /**
  * Decodes a 0x03 snapshot into the preallocated `out` (grown with fresh
- * objects only when too short). Returns { roomMs, count } or null.
+ * objects only when too short) and, when present, the own state into
+ * `self` (times in room seconds). Returns { roomMs, count, hasSelf } or null.
  */
-export function decodeEnemySnapshot(b: Uint8Array, out: EnemySnap[], make: () => EnemySnap): { roomMs: number; count: number } | null {
-  if (b.length < 6 || b[0] !== OP_ENEMIES) return null;
+export function decodeEnemySnapshot(
+  b: Uint8Array,
+  out: EnemySnap[],
+  make: () => EnemySnap,
+  self: HeroCombatSnap | null = null,
+): { roomMs: number; count: number; hasSelf: boolean } | null {
+  if (b.length < 7 || b[0] !== OP_ENEMIES) return null;
   const dv = viewOf(b);
   const roomMs = dv.getUint32(1, true);
   const n = b[5];
-  if (b.length !== 6 + n * ENEMY_BYTES) return null;
+  const flagAt = 6 + n * ENEMY_BYTES;
+  if (b.length < flagAt + 1) return null;
+  const hasSelf = b[flagAt] === 1;
+  if (b.length !== flagAt + 1 + (hasSelf ? SELF_BYTES : 0)) return null;
   while (out.length < n) out.push(make());
   let o = 6;
   for (let i = 0; i < n; i++, o += ENEMY_BYTES) {
@@ -482,7 +532,19 @@ export function decodeEnemySnapshot(b: Uint8Array, out: EnemySnap[], make: () =>
     e.flags = dv.getUint8(o + 16);
     e.target = dv.getUint8(o + 17);
   }
-  return { roomMs, count: n };
+  if (hasSelf && self) {
+    o = flagAt + 1;
+    const t = (rel: number): number => (roomMs + rel) / 1000;
+    self.hp = dv.getUint16(o, true) / 10;
+    self.maxHp = dv.getUint16(o + 2, true) / 10;
+    self.down = dv.getUint8(o + 4) !== 0;
+    self.downUntil = t(dv.getInt32(o + 5, true));
+    self.combo = dv.getUint16(o + 9, true);
+    self.comboUntil = t(dv.getInt32(o + 11, true));
+    self.focus = dv.getUint16(o + 15, true) / 10;
+    self.iframesUntil = t(dv.getInt32(o + 17, true));
+  }
+  return { roomMs, count: n, hasSelf };
 }
 
 // ---------------------------------------------------------------------------

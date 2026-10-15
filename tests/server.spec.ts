@@ -36,7 +36,7 @@ import { CombatSim } from '../src/combat/combatSim';
 import { AR } from '../src/combat/spawnPoints';
 import { tuning } from '../src/config/tuning';
 import { Room, STATE_CORRECTED, STATE_DROPPED, STATE_KICKED, STATE_OK, type RoomOut } from '../src/sim/room';
-import { HERO_ID_BASE, makeEnemySnap, type CombatEvent, type EnemySnap, type MapRuntime } from '../src/sim/types';
+import { HERO_ID_BASE, makeEnemySnap, makeHeroCombatSnap, type CombatEvent, type EnemySnap, type MapRuntime } from '../src/sim/types';
 import { RoomManager, type Peer } from '../server/roomManager';
 import { AbuseMeter, ConnLimiter, TokenBucket, clientIp } from '../server/limits';
 import { argsToEnv, loadConfig } from '../server/config';
@@ -70,6 +70,8 @@ const ALL_EVENTS: NetEvent[] = [
   { type: 'splash', x: 400, y: -1.2, z: 900 },
   { type: 'respawn' },
   { type: 'recover' },
+  { type: 'lunge' },
+  { type: 'lungeEnd', ok: true },
   { type: 'strike', move: 3 },
   { type: 'dodge' },
   { type: 'hurt', dmg: 22 },
@@ -82,7 +84,7 @@ function fullSample(): HeroSample {
   Object.assign(s, {
     seq: 65000, t: 123456789, x: 123.456, y: 78.9, z: -654.321, vx: 45.67, vy: -12.34, vz: 99.99,
     facing: -2.5, mode: 2, flags: HF.ROPE_ATTACHED | HF.HAND_RIGHT | HF.DIVING, blocks: HB.ANCHOR | HB.ZIP | HB.WALL | HB.TRAV,
-    tp: 7, action: 4, actionT: 0.37, ax: 100.5, ay: 140.25, az: -620, zx: 1, zy: 2, zz: 3, wnx: 0.7071, wnz: -0.7071,
+    tp: 7, action: 4, actionSide: 1, actionT: 0.37, actionDur: 0.42, ax: 100.5, ay: 140.25, az: -620, zx: 1, zy: 2, zz: 3, wnx: 0.7071, wnz: -0.7071,
     wrun: 8.3, travKind: 1, travT: 0.21, travDur: 0.6,
   });
   s.events = ALL_EVENTS.map((e) => ({ ...e }));
@@ -164,8 +166,9 @@ test.describe('codec', () => {
     for (const k of ['x', 'y', 'z', 'ax', 'ay', 'az', 'zx', 'zy', 'zz'] as const) expect(d[k]).toBe(Math.fround(s[k]));
     for (const k of ['vx', 'vy', 'vz'] as const) expect(Math.abs(d[k] - s[k])).toBeLessThanOrEqual(0.005 + 1e-9);
     expect(Math.abs(d.facing - s.facing)).toBeLessThan(1e-4);
-    expect([d.mode, d.flags, d.blocks, d.tp, d.action]).toEqual([s.mode, s.flags, s.blocks, s.tp, s.action]);
+    expect([d.mode, d.flags, d.blocks, d.tp, d.action, d.actionSide]).toEqual([s.mode, s.flags, s.blocks, s.tp, s.action, s.actionSide]);
     expect(Math.abs(d.actionT - s.actionT)).toBeLessThanOrEqual(0.005);
+    expect(Math.abs(d.actionDur - s.actionDur)).toBeLessThanOrEqual(0.005);
     expect(Math.abs(d.wnx - s.wnx)).toBeLessThan(0.01);
     expect(Math.abs(d.wnz - s.wnz)).toBeLessThan(0.01);
     expect(Math.abs(d.wrun - s.wrun)).toBeLessThanOrEqual(0.05);
@@ -180,11 +183,11 @@ test.describe('codec', () => {
         else expect(b[k], `${a.type}.${k}`).toBe(a[k]);
       }
     }
-    // Sizes: ~34 B at rest, ~46 B on a line (design: 34–58 B plus events).
+    // Sizes: 36 B at rest, 48 B on a line (design: 34–58 B plus events).
     const rest = makeHeroSample();
-    expect(encodeHeroState(rest).length).toBe(34);
+    expect(encodeHeroState(rest).length).toBe(36);
     rest.blocks = HB.ANCHOR;
-    expect(encodeHeroState(rest).length).toBe(46);
+    expect(encodeHeroState(rest).length).toBe(48);
   });
 
   test('malformed hero states are rejected', () => {
@@ -242,11 +245,18 @@ test.describe('codec', () => {
       });
       snaps.push(e);
     }
-    const bytes = encodeEnemySnapshot(98765, snaps, snaps.length, new ByteWriter());
-    expect(bytes.length).toBe(6 + 18 * snaps.length);
+    const mine = { hp: 63.4, maxHp: 100, down: true, downUntil: 101.5, combo: 7, comboUntil: 99.3, focus: 45.5, iframesUntil: -1e9 };
+    const bytes = encodeEnemySnapshot(98765, snaps, snaps.length, new ByteWriter(), mine);
+    expect(bytes.length).toBe(7 + 18 * snaps.length + 21);
     const out: EnemySnap[] = [];
-    const r = decodeEnemySnapshot(bytes, out, makeEnemySnap);
-    expect(r).toEqual({ roomMs: 98765, count: snaps.length });
+    const got = makeHeroCombatSnap();
+    const r = decodeEnemySnapshot(bytes, out, makeEnemySnap, got);
+    expect(r).toEqual({ roomMs: 98765, count: snaps.length, hasSelf: true });
+    expect(got).toMatchObject({ hp: 63.4, maxHp: 100, down: true, combo: 7, focus: 45.5 });
+    expect(got.downUntil).toBeCloseTo(101.5, 6);
+    expect(got.comboUntil).toBeCloseTo(99.3, 6);
+    expect(got.iframesUntil).toBeLessThan(-1e6); // "never" stays far in the past
+    expect(decodeEnemySnapshot(encodeEnemySnapshot(5, [], 0, new ByteWriter()), out, makeEnemySnap)).toEqual({ roomMs: 5, count: 0, hasSelf: false });
     let maxPos = 0;
     let maxYaw = 0;
     for (let i = 0; i < snaps.length; i++) {
@@ -664,11 +674,11 @@ test.describe('room', () => {
     expect(snaps.length).toBe(2); // every 2nd of 4 steps
     const decoded: EnemySnap[] = [];
     expect(decodeEnemySnapshot(snaps[0], decoded, makeEnemySnap)?.count).toBe(3);
-    // Enemies gone: one empty snapshot clears the client, then nothing.
+    // Enemies gone: snapshots keep coming (they also carry the hero's own combat state).
     sim.enemies = 0;
     out.clear();
     for (let i = 4; i < 10; i++) room.step(10_000 + (i * 1000) / 30);
-    expect(out.bin(a, 0x03).map((s) => s.length)).toEqual([6]);
+    expect(out.bin(a, 0x03).map((s) => s.length)).toEqual([7 + 21, 7 + 21, 7 + 21]);
     // Nobody connected: the sim does not step.
     room.drop(a, true, 11_000);
     room.drop(b, true, 11_000);
