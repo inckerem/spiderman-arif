@@ -6,6 +6,8 @@ import { tr } from './i18n/tr';
 import { clamp, smoothstep } from './core/math';
 import { MODE_SWING, MODE_ZIP, type PlayerEvent } from './player/player';
 import type { Action } from './input/bindings';
+import { RooftopMoment } from './extras/rooftopMoment';
+import { tuning } from './config/tuning';
 
 export type AppState = 'loading' | 'menu' | 'playing' | 'paused' | 'photo';
 
@@ -25,6 +27,8 @@ export class App {
   minimapRings: MinimapRing[] = [];
   /** Per-frame HUD hook for ring races and other extras. */
   extraHud: ((hud: HudState) => void) | null = null;
+  /** Standing still on a roof: night, rain and music (this client only). */
+  moment!: RooftopMoment;
   private readonly hud: HudState = {
     speed: 0,
     altitude: 0,
@@ -45,6 +49,7 @@ export class App {
     swinging: false,
     diving: false,
     paused: true,
+    rain: 0,
   };
   private readonly ringHud: NonNullable<HudState['ring']> = { routeName: '', index: 0, total: 0, time: 0, best: null, finished: null };
   private readonly screenPt = { x: 0, y: 0 };
@@ -68,9 +73,10 @@ export class App {
     const game = this.game;
     await game.init();
     ui.setLayout(game.layout);
+    this.moment = new RooftopMoment(game);
     this.applySettings(ui.settings);
     this.wire();
-    game.view = 'menu';
+    game.showMenu();
     game.playing = false;
     ui.hideLoading();
     ui.showMainMenu();
@@ -95,6 +101,7 @@ export class App {
       else if (e.type === 'finish') audio.ringComplete();
     };
     game.animator.onFootstep = (f) => audio.footstep(f.surface, f.intensity);
+    this.moment.onThunder = (closeness) => audio.thunder(closeness);
     game.input.onLock((locked) => this.onLock(locked));
     // Audio may only start after a user gesture.
     const unlock = (): void => {
@@ -115,12 +122,14 @@ export class App {
 
   // ------------------------------------------------------------------ flow
 
+  /** A new game from the main menu: the hero starts at the spawn point (the attract hero stays behind the menu). */
   play(): void {
     const game = this.game;
+    this.moment.cancel();
     this.ui.hideMenus();
     this.ui.setHudVisible(true);
-    game.view = 'play';
-    game.rig.snap();
+    game.input.clearAll();
+    game.startPlay();
     this.state = 'playing';
     this.audio.setMenuMode(false);
     this.audio.unlock();
@@ -152,7 +161,9 @@ export class App {
     game.input.exitLock();
     game.playing = false;
     game.input.enabled = false;
-    game.view = 'menu';
+    this.moment.cancel();
+    this.ui.setCinematic(false);
+    game.showMenu();
     this.state = 'menu';
     this.ui.setHudVisible(false);
     this.ui.showClickToResume(false);
@@ -342,6 +353,14 @@ export class App {
     const game = this.game;
     const pl = game.player;
     const ui = this.ui;
+    // Rooftop moment (holds still while paused, in photo mode or waiting for the pointer lock).
+    const moment = this.moment;
+    moment.update(dt, this.state === 'playing' && game.playing);
+    ui.setCinematic(moment.cine);
+    // Music plays in the menus and in the rooftop moment only.
+    const M = tuning.moment;
+    const music = this.state === 'menu' ? 1 : moment.music;
+    this.audio.setMusicPresence(music, music > this.audio.musicPresence ? (this.state === 'menu' ? 1 : M.musicInSeconds) : this.state === 'playing' && moment.running ? M.musicOutSeconds : 1);
     if (dt > 0) this.fpsAvg += (1 / Math.max(1e-3, dt) - this.fpsAvg) * Math.min(1, dt * 2);
     const hud = this.hud;
     hud.fps = ui.settings.showFps ? this.fpsAvg : null;
@@ -396,6 +415,7 @@ export class App {
     L.swinging = pl.mode === MODE_SWING || pl.mode === MODE_ZIP;
     L.diving = pl.diving;
     L.paused = this.state !== 'playing' || !game.playing;
+    L.rain = game.weather.rain;
     this.audio.update(dt, L);
     // A missing music file is reported once, the game continues silently.
     this.warnTimer -= dt;

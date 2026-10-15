@@ -19,7 +19,7 @@ Recorded as the user decided them.
 - UI stays Turkish; all new strings go to `src/i18n/tr.ts`. Docs stay English.
 
 ### M8 Bug fixes and graininess
-- Fix every code-review finding: swing line stays attached after pause, pointer-lock loss or photo mode (`Input.clearAll` drops the release edge); a corrupt binding code such as `"toString"` freezes boot (`keyLabel` resolves it through the object prototype); Space during line flight cancels both the jump and the line; a swing click shorter than one frame is dropped; the release trick replays after land + jump in the animator; docs mismatches.
+- Fix every code-review finding: swing line stays attached after pause, pointer-lock loss or photo mode (`Input.clearAll` drops the release edge); a corrupt binding code such as `"toString"` freezes boot (`keyLabel` resolves it through the object prototype); Space during line flight cancels both the jump and the line (implemented as: Space with feet supported jumps and the line keeps flying; from the air or a wall Space still cuts the line); a swing click shorter than one frame is dropped; the release trick replays after land + jump in the animator; docs mismatches.
 - Fix every graininess cause: dynamic resolution never scales back up on 60 Hz displays (it measures frame-to-frame time and only raises below 13.4 ms; floor 0.5); z-fighting between roof top and cornice top on most buildings (`buildingsGeo.ts`); PCF shadow per-pixel noise at radius 2.2 without TAA; `pixelRatioCap` 1 on Low/Medium blurs on HiDPI; Low preset nearest-filter upscale; outline speckle at mid distance; wall band-edge speckle at exactly 12:00.
 
 ### M9 Attract mode and rooftop moment
@@ -81,7 +81,7 @@ Recorded as the user decided them.
 | --- | --- | --- |
 | Line stays attached after pause / lock loss / photo mode | `input/input.ts`, `app.ts` | `clearAll` emits pending release edges (swing, zip, held keys) before clearing, or the app releases the rope explicitly on leaving play |
 | `"toString"` binding freezes boot | `ui/keyLabels.ts`, `input/bindings.ts` | own-property lookups (`Object.hasOwn` / `Map`), validate codes against a whitelist |
-| Space in line flight cancels jump and line | `player/player.ts` | Space during line flight only cancels the pending line; jump is consumed once |
+| Space in line flight cancels jump and line | `player/player.ts` | Space with feet supported jumps and the line keeps flying; from the air or a wall Space still cuts the line |
 | Sub-frame click dropped | `input/input.ts` | queue press+release pairs so a tick sees `swingPressed` and `swingReleased` in order |
 | Release trick replays after land + jump | `character/animator.ts` | clear trick state on landing; tricks start only from a fresh release event |
 | Dynamic resolution stuck low at 60 Hz | `render/postfx.ts`, `game.ts` | measure GPU/CPU work time (not vsync-bound frame interval); raise when headroom exists at the display refresh; review floor 0.5 |
@@ -95,7 +95,7 @@ Recorded as the user decided them.
 
 **Tests to add.**
 - Extend g/i: pause, lock loss and photo mode while a line is held end with no rope; a corrupt stored binding (`toString`, `__proto__`, `constructor`) boots and reads as empty.
-- Line controls: a press+release inside one frame attaches and releases; Space during line flight does not jump and cancels only the line.
+- Line controls: a press+release inside one frame attaches and releases; Space with feet supported during line flight jumps and the line keeps flying; from the air or a wall Space still cuts it.
 - f: land + jump after a trick release shows no trick replay.
 - Render driver: dynamic-resolution scale returns to max after a load spike at a simulated 60 Hz; a pixel-diff check over two frames of a static roof view reports no z-fight flicker at 12:00.
 
@@ -123,6 +123,8 @@ Recorded as the user decided them.
 - Soak e includes attract mode and moment cycles (no leaks from rain buffers).
 
 **Risks.** Bot logic coupled to `Game` test internals; extract only pure planning code. Rain fill-rate on Low; scale streak count by preset.
+
+**As built.** The bot play lives in `src/player/autopilot.ts` (input levels, aiming, the swing brain, route following, the `Autopilot`), the director in `src/camera/director.ts`, the attract composition in `src/extras/attractMode.ts`, the moment in `src/extras/rooftopMoment.ts` and the rain in `src/fx/rain.ts`. Both specs are one file, `tests/attract.spec.ts` (j1 attract, j2 moment); the soak runs an attract stretch and a moment cycle every minute.
 
 ## M10 Mobile
 

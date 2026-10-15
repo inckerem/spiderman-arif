@@ -2,7 +2,8 @@
  * Continuous layers driven every frame by the listener state: speed wind
  * (dive flutter, slow gusts, a swing-line whistle), a rooftop breeze, the
  * city traffic hum with occasional distant horns, park birds by day, night
- * crickets and waterfront lapping.
+ * crickets, waterfront lapping and rain (a hiss and a patter band with
+ * droplet ticks, plus thunder on request).
  *
  * The static graph is built once; update() only moves AudioParams (with
  * setTargetAtTime, so every change is click-free). Short one-shots (bird
@@ -11,7 +12,7 @@
  */
 import { chance, clamp01, glide, perc, pick, pulseCurve, rand, randInt, Smoothed } from './dsp';
 import { tone, type Kit } from './kit';
-import { makePanner, PRI_AMBIENT } from './voices';
+import { makePanner, PRI_AMBIENT, PRI_SFX } from './voices';
 
 /** Smoothed listener values the ambience follows. */
 export interface AmbienceInput {
@@ -26,6 +27,8 @@ export interface AmbienceInput {
   swing: number;
   /** 0..1, diving. */
   dive: number;
+  /** 0..1, rain (the rooftop moment). */
+  rain: number;
 }
 
 // Full-scale linear level of each layer before the wind/ambience buses.
@@ -39,6 +42,10 @@ const BIRD_LEVEL = 0.07;
 const CRICKET_LEVEL = 0.05;
 const HORN_LEVEL = 0.025;
 const LAP_LEVEL = 0.09;
+const RAIN_LEVEL = 0.2;
+const PATTER_LEVEL = 0.12;
+const DRIP_LEVEL = 0.05;
+const THUNDER_LEVEL = 0.5;
 
 /** Cricket voices: carrier Hz, pulse rate Hz, chirp rate Hz, pan, relative level. */
 const CRICKETS: readonly (readonly [number, number, number, number, number])[] = [
@@ -62,12 +69,17 @@ export class Ambience {
   private readonly waterGain: Smoothed;
   private readonly birdGain: Smoothed;
   private readonly cricketGain: Smoothed;
+  private readonly rainGain: Smoothed;
+  private readonly patterGain: Smoothed;
   private readonly birdBus: GainNode;
+  private readonly rainBus: GainNode;
   private readonly hornBus: GainNode;
   private readonly lapBus: GainNode;
   private nextBird: number;
   private nextHorn: number;
   private nextLap: number;
+  private nextDrip: number;
+  private rain = 0;
   private traffic = 0;
   private birds = 0;
   private water = 0;
@@ -224,15 +236,31 @@ export class Ambience {
     const chorus = gain(0.6);
     wire(pinkB, chorusBp, chorusAm, chorus, crickets);
 
+    // --- Rain: a high hiss and a softer patter band of pink noise, swelling slowly with the gusts.
+    const rainSrc = loop(bank.pink, 0.25);
+    const rainHp = filter('highpass', 1900, 0.5);
+    const rainLp = filter('lowpass', 7800, 0.5);
+    const rainHiss = gain(0);
+    const rainMod = gain(0.85);
+    wire(rainSrc, rainHp, rainLp, rainHiss, rainMod, ambOut);
+    const patterSrc = loop(bank.pink, 0.75);
+    const patterBp = filter('bandpass', 950, 0.7);
+    const patter = gain(0);
+    wire(patterSrc, patterBp, patter, rainMod);
+    const rainSwell = gain(0.15);
+    wire(gustB, rainSwell, rainMod.gain);
+
     // --- Ambient one-shots: birds, horns and laps play into their own buses. Each bus feeds the
     // shared reverb after its own gain, so the wet part always follows the dry level.
     this.birdBus = gain(0);
     this.hornBus = gain(1);
     this.lapBus = gain(1);
+    this.rainBus = gain(1);
     const sends: [GainNode, number][] = [
       [this.birdBus, 0.12],
       [this.hornBus, 0.35],
       [this.lapBus, 0.05],
+      [this.rainBus, 0.5],
     ];
     for (const [bus, amount] of sends) {
       bus.connect(ambOut);
@@ -253,10 +281,13 @@ export class Ambience {
     this.waterGain = new Smoothed(water.gain, 0.3);
     this.birdGain = new Smoothed(this.birdBus.gain, 0.3);
     this.cricketGain = new Smoothed(crickets.gain, 0.3);
+    this.rainGain = new Smoothed(rainHiss.gain, 0.4);
+    this.patterGain = new Smoothed(patter.gain, 0.4);
 
     this.nextBird = now + rand(0.8, 2.5);
     this.nextHorn = now + rand(5, 12);
     this.nextLap = now + rand(0.8, 2);
+    this.nextDrip = now + 0.2;
   }
 
   /** Moves every layer towards the listener state; spawns ambient one-shots only when `live`. */
@@ -290,13 +321,21 @@ export class Ambience {
     this.cricketGain.to(CRICKET_LEVEL * night * (0.3 + 0.7 * park) * (1 - 0.75 * altF), now);
     this.water = waterF * (1 - 0.6 * altF);
     this.waterGain.to(WATER_LEVEL * this.water, now);
+    this.rain = clamp01(s.rain);
+    this.rainGain.to(RAIN_LEVEL * this.rain, now);
+    this.patterGain.to(PATTER_LEVEL * this.rain * this.rain, now);
 
     if (!live) {
       // Nothing is spawned while paused; resume with fresh intervals instead of a burst.
       this.nextBird = Math.max(this.nextBird, now + 0.5);
       this.nextHorn = Math.max(this.nextHorn, now + 3);
       this.nextLap = Math.max(this.nextLap, now + 0.5);
+      this.nextDrip = Math.max(this.nextDrip, now + 0.2);
       return;
+    }
+    if (now >= this.nextDrip) {
+      if (this.rain > 0.2) drip(this.kit, this.rainBus, DRIP_LEVEL * this.rain);
+      this.nextDrip = now + rand(0.05, 0.16) / Math.max(0.3, this.rain);
     }
     if (now >= this.nextBird) {
       if (this.birds > 0.03) birdPhrase(this.kit, this.birdBus);
@@ -310,6 +349,11 @@ export class Ambience {
       if (this.water > 0.06) lap(this.kit, this.lapBus, LAP_LEVEL * this.water);
       this.nextLap = now + rand(1.1, 3.2);
     }
+  }
+
+  /** Distant thunder (0..1 closeness): a soft crack when close, then a long rolling rumble. */
+  thunder(closeness: number): void {
+    thunder(this.kit, this.rainBus, THUNDER_LEVEL * (0.5 + 0.5 * clamp01(closeness)), clamp01(closeness));
   }
 }
 
@@ -474,5 +518,52 @@ function lap(kit: Kit, dest: AudioNode, level: number): void {
     const tp = t + rand(0.05, 0.2);
     const fp = rand(600, 900);
     tone(v, tp, 'sine', fp, fp * 1.6, 0.03, 0.06, 0.002, 0.04);
+  }
+}
+
+/** A raindrop tick on a nearby surface: a very short band-passed noise click. */
+function drip(kit: Kit, dest: AudioNode, level: number): void {
+  const v = kit.voice(level * rand(0.3, 1), rand(-0.9, 0.9), 0, PRI_AMBIENT, dest);
+  if (!v) return;
+  const t = v.t0;
+  const n = v.noise(kit.bank.white, t, t + 0.05);
+  const f = v.filter('bandpass', rand(2200, 5200), rand(1.5, 3));
+  const g = v.gain(0);
+  perc(g.gain, t, 1, 0.001, rand(0.008, 0.025));
+  n.connect(f);
+  f.connect(g);
+  g.connect(v.out);
+}
+
+/** Thunder: low brown-noise rumble with a few rolling swells; close strikes start with a crack. */
+function thunder(kit: Kit, dest: AudioNode, level: number, closeness: number): void {
+  const v = kit.voice(level, rand(-0.5, 0.5), 0, PRI_SFX, dest);
+  if (!v) return;
+  const t = v.t0;
+  const dur = rand(3.5, 6);
+  const n = v.noise(kit.bank.brown, t, t + dur + 0.1);
+  const lp = v.filter('lowpass', 120 + 160 * closeness, 0.7);
+  const g = v.gain(0);
+  n.connect(lp);
+  lp.connect(g);
+  g.connect(v.out);
+  const p = g.gain;
+  p.setValueAtTime(0, t);
+  p.linearRampToValueAtTime(0.8, t + 0.12);
+  let tt = t + 0.12;
+  for (let i = 0; i < 4; i++) {
+    tt += rand(0.35, 0.9);
+    p.linearRampToValueAtTime(rand(0.35, 1), tt);
+  }
+  p.exponentialRampToValueAtTime(0.001, t + dur);
+  p.linearRampToValueAtTime(0, t + dur + 0.05);
+  if (closeness > 0.5) {
+    const c = v.noise(kit.bank.white, t, t + 0.6);
+    const bp = v.filter('bandpass', rand(700, 1100), 0.8);
+    const cg = v.gain(0);
+    perc(cg.gain, t, 0.6 * closeness, 0.004, 0.45);
+    c.connect(bp);
+    bp.connect(cg);
+    cg.connect(v.out);
   }
 }

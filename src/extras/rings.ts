@@ -315,6 +315,13 @@ export class RingRaces {
     return x * x + y * y + z * z < RING_RADIUS * RING_RADIUS;
   }
 
+  /** Ends a run in progress without a result (a new game from the main menu). */
+  abandon(): void {
+    this.active = -1;
+    this.finished = null;
+    this.finishedRoute = -1;
+  }
+
   /** HUD state (null when no run is active or being shown). */
   hud(): RingHud | null {
     if (this.active >= 0) {

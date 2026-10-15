@@ -272,6 +272,7 @@ export class UI {
   private readonly toastEl: HTMLDivElement;
   private readonly toastText: Text;
   private readonly resumeEl: HTMLDivElement;
+  private readonly letterbox: HTMLDivElement;
   private readonly photoEl: HTMLElement;
   private readonly photoFov: HTMLInputElement;
   private readonly photoFovVal: Text;
@@ -300,6 +301,7 @@ export class UI {
   private loadingTimer = 0;
   private loadingVisible = true;
   private resumeShown = false;
+  private cine = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -318,6 +320,11 @@ export class UI {
     this.toastText = textNode(toastSpan);
     this.toastEl.append(toastSpan);
     top.append(this.hud.ringPanel, this.toastEl);
+
+    // Cinematic letterbox bars (rooftop moment), slid in by the sk-cine class.
+    this.letterbox = el('div', 'sk-letterbox');
+    this.letterbox.setAttribute('aria-hidden', 'true');
+    this.letterbox.append(el('div', 'sk-lb sk-lb-top'), el('div', 'sk-lb sk-lb-bottom'));
 
     this.resumeEl = el('div', 'sk-resume');
     this.resumeEl.append(icon(ICON_MOUSE), el('span', 'sk-resume-text', tr.hud.clickToResume));
@@ -351,7 +358,7 @@ export class UI {
     this.loadingPct = loading.pct;
     this.loadingStage = loading.stage;
 
-    root.append(this.hud.layer, this.hud.fpsEl, this.resumeEl, this.photoEl, this.menuLayer, top, this.loadingEl);
+    root.append(this.hud.layer, this.letterbox, this.hud.fpsEl, this.resumeEl, this.photoEl, this.menuLayer, top, this.loadingEl);
 
     window.addEventListener('resize', this.onResize);
     window.addEventListener('pointerdown', this.onPointerDown, true);
@@ -454,6 +461,17 @@ export class UI {
   setHudVisible(v: boolean): void {
     this.hudWanted = v;
     this.applyHudVisibility();
+  }
+
+  /** Cinematic look (rooftop moment): the HUD fades out and letterbox bars slide in. */
+  setCinematic(on: boolean): void {
+    if (on === this.cine) return;
+    this.cine = on;
+    this.root.classList.toggle('sk-cine', on);
+  }
+
+  get cinematic(): boolean {
+    return this.cine;
   }
 
   updateHud(s: HudState): void {

@@ -4,8 +4,9 @@ import { expectClean, openGame, saveResult } from './helpers';
 
 // (g) Shell: settings round-trip through the real settings screen and
 // localStorage (including a corrupt entry), the costume picker, the audio
-// graph and music decode after the first gesture, M mute, pause on
-// pointer-lock loss, resume, and photo mode PNG export.
+// graph and music decode after the first gesture (music in the menu, none in
+// game outside the rooftop moment), M mute, pause on pointer-lock loss,
+// resume, and photo mode PNG export.
 
 async function openShell(page: Page): Promise<string[]> {
   const problems: string[] = [];
@@ -111,9 +112,10 @@ test('g. settings persist, audio decodes, pause/resume and photo export work', a
   await page.reload();
   problems = await openShell(page);
 
-  // --- Play: first gesture unlocks audio, music decodes ------------------------
-  await page.getByRole('button', { name: 'Oyna' }).click();
-  await page.waitForFunction(() => (window as any).__game.game.playing === true, null, { timeout: 120_000 });
+  // --- Menu: first gesture unlocks audio, music decodes and plays -------------
+  await page.getByRole('button', { name: 'Kontroller' }).first().click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Oyna' })).toBeVisible();
   await page.waitForFunction(() => (window as any).__game.app.audio.getDebugInfo().musicLoaded === true, null, { timeout: 120_000 });
   const audio = await page.evaluate(() => (window as any).__game.app.audio.getDebugInfo());
   expect(audio.unlocked).toBe(true);
@@ -141,6 +143,19 @@ test('g. settings persist, audio decodes, pause/resume and photo export work', a
     return best;
   });
   expect(musicRms).toBeGreaterThan(0.005);
+  expect(audio.musicLevel).toBeGreaterThan(0);
+
+  // --- Play: no music in game (it returns in the menus and the rooftop moment) ---
+  await page.getByRole('button', { name: 'Oyna' }).click();
+  await page.waitForFunction(() => (window as any).__game.game.playing === true, null, { timeout: 120_000 });
+  await page.waitForFunction(() => (window as any).__game.app.audio.musicPresence === 0, null, { timeout: 60_000 });
+  const inGame = await page.evaluate(() => {
+    const a = (window as any).__game.app.audio;
+    return { presence: a.musicPresence, level: a.getDebugInfo().musicLevel, loops: a.getDebugInfo().loopsScheduled };
+  });
+  expect(inGame.presence).toBe(0);
+  expect(inGame.level).toBe(0);
+  expect(inGame.loops).toBeGreaterThan(0);
   await page.keyboard.press('m');
   expect(await page.evaluate(() => (window as any).__game.app.audio.musicMuted)).toBe(true);
   await page.keyboard.press('m');
@@ -179,7 +194,7 @@ test('g. settings persist, audio decodes, pause/resume and photo export work', a
   await page.keyboard.press('p');
   await page.waitForFunction(() => (window as any).__game.app.state === 'playing', null, { timeout: 60_000 });
 
-  const result = { applied: want, reloadedOk: true, audio, musicRms, voices, photo: { name, bytes: bytes.length } };
+  const result = { applied: want, reloadedOk: true, audio, musicRms, inGame, voices, photo: { name, bytes: bytes.length } };
   saveResult('g-ui', result);
   console.log('g. ui', JSON.stringify(result));
   expectClean(problems);

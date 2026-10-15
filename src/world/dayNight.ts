@@ -38,6 +38,10 @@ const KEYS: Key[] = [
 
 const ca = new Color();
 const cb = new Color();
+/** Overcast storm colours (sRGB): sky, horizon and fog lean toward these as `storm` rises. */
+const STORM_ZENITH = new Color(0x1c232e);
+const STORM_HORIZON = new Color(0x3a4452);
+const STORM_FOG = new Color(0x2c3440);
 
 function lerpHex(out: Color, a: number, b: number, t: number): Color {
   ca.setHex(a);
@@ -64,6 +68,12 @@ export interface DayNightTargets {
 export class DayNight {
   hour = 16.6;
   paused = false;
+  /** The hour is driven from outside (the rooftop moment): advance() leaves it alone. */
+  hold = false;
+  /** 0..1 overcast rain look: grey sky, nearer and denser fog, dimmer sun, heavy low clouds. */
+  storm = 0;
+  /** 0..1 lightning flash on top of the ambient light. */
+  flash = 0;
   /** Real minutes per full day. */
   dayLengthMinutes = 12;
   readonly sunDir = new Vector3(0, 1, 0);
@@ -76,7 +86,7 @@ export class DayNight {
   constructor(private readonly t: DayNightTargets) {}
 
   advance(dtSeconds: number, rate = 1): void {
-    if (this.paused) return;
+    if (this.paused || this.hold) return;
     const hoursPerSecond = 24 / (Math.max(0.5, this.dayLengthMinutes) * 60);
     this.hour = (this.hour + dtSeconds * hoursPerSecond * rate) % 24;
   }
@@ -152,6 +162,31 @@ export class DayNight {
     this.t.sky.setCloudTint(this.col);
     lerpHex(this.col, a.outline, b.outline, u);
     this.t.outline(this.col, 0.92);
+    this.t.sky.uniforms.uCover.value = this.storm;
+    this.t.sky.cover = this.storm;
+    if (this.storm > 0) this.applyStorm(this.storm);
+    if (this.flash > 0) this.t.hemi.intensity += this.flash * 1.6;
+  }
+
+  /** Overcast rain on top of the time of day (after apply's keyframe pass). */
+  private applyStorm(s: number): void {
+    const su = this.t.sky.uniforms;
+    su.uZenith.value.lerp(ca.copy(STORM_ZENITH).multiplyScalar(0.55 + 0.45 * (1 - this.night)), 0.75 * s);
+    su.uHorizon.value.lerp(ca.copy(STORM_HORIZON).multiplyScalar(0.6 + 0.4 * (1 - this.night)), 0.7 * s);
+    su.uStars.value *= 1 - s;
+    const fog = this.t.fog;
+    fog.color.lerp(ca.copy(STORM_FOG).multiplyScalar(0.6 + 0.4 * (1 - this.night)), 0.7 * s);
+    fog.near *= 1 - 0.65 * s;
+    fog.far *= 1 - 0.5 * s;
+    this.t.fogRange(fog.near, fog.far);
+    su.uGround.value.copy(fog.color).multiplyScalar(0.55);
+    this.t.sun.intensity *= 1 - 0.4 * s;
+    this.t.sky.setCloudTint(this.col.copy(this.t.sky.cloudTint).multiplyScalar(1 - 0.45 * s));
+    shared.uSkyRefl.value.copy(su.uHorizon.value).lerp(su.uZenith.value, 0.35);
+    for (const w of this.t.water) {
+      (w.uniforms.uSky!.value as Color).copy(su.uHorizon.value);
+      (w.uniforms.uDeep!.value as Color).multiplyScalar(1 - 0.3 * s);
+    }
   }
 
   /** Keep the shadow camera on the player, snapped to shadow texels to avoid shimmer. */

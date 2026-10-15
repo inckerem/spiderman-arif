@@ -26,7 +26,11 @@ export class Sky {
     uSunColor: { value: new Color(0xfff2d0) },
     uStars: { value: 0 },
     uTime: { value: 0 },
+    /** 0..1 overcast: hides the sun, moon and stars. */
+    uCover: { value: 0 },
   };
+  /** 0..1 overcast: the clouds grow, merge and sink (set by the day-night cycle). */
+  cover = 0;
   readonly clouds: InstancedMesh;
   private readonly cloudData: Array<{ x: number; y: number; z: number; puffs: Array<[number, number, number, number, number]> }> = [];
   private cloudOffset = 0;
@@ -56,6 +60,7 @@ export class Sky {
         uniform vec3 uSunColor;
         uniform float uStars;
         uniform float uTime;
+        uniform float uCover;
         varying vec3 vDir;
         float hash13(vec3 p) {
           p = fract(p * 0.1031);
@@ -69,13 +74,13 @@ export class Sky {
           col = mix(col, uGround, smoothstep(0.0, -0.25, h));
           // Sun: hard cel disk + soft halo.
           float sd = dot(d, normalize(uSunDir));
-          float sunVis = smoothstep(-0.12, 0.02, uSunDir.y);
+          float sunVis = smoothstep(-0.12, 0.02, uSunDir.y) * (1.0 - uCover);
           col += uSunColor * (pow(max(sd, 0.0), 220.0) * 0.6 + pow(max(sd, 0.0), 12.0) * 0.18) * sunVis;
           col = mix(col, uSunColor * 1.35 + 0.15, smoothstep(0.99935, 0.99955, sd) * sunVis);
           // Moon: disk with a simple phase terminator and maria.
           vec3 md = normalize(uMoonDir);
           float mdot = dot(d, md);
-          float moonVis = smoothstep(-0.1, 0.05, md.y);
+          float moonVis = smoothstep(-0.1, 0.05, md.y) * (1.0 - uCover);
           float disk = smoothstep(0.99955, 0.99968, mdot);
           if (disk > 0.0) {
             vec3 rel = d - md * mdot;
@@ -145,9 +150,12 @@ export class Sky {
     for (const c of this.cloudData) {
       let x = c.x + this.cloudOffset;
       x = ((((x + 2400) % 4800) + 4800) % 4800) - 2400;
+      // Overcast: puffs swell into a low, continuous deck.
+      const k = 1 + 1.4 * this.cover;
+      const y = c.y - 170 * this.cover;
       for (const [px, py, pz, r, ry] of c.puffs) {
-        this.p.set(x + px, c.y + py, c.z + pz);
-        this.s.set(r, ry, r * 0.9);
+        this.p.set(x + px * k, y + py, c.z + pz * k);
+        this.s.set(r * k, ry * (1 + 0.6 * this.cover), r * 0.9 * k);
         this.m.compose(this.p, this.q, this.s);
         this.clouds.setMatrixAt(i++, this.m);
       }
@@ -157,6 +165,10 @@ export class Sky {
 
   setCloudTint(c: Color): void {
     this.cloudMat.color.copy(c);
+  }
+
+  get cloudTint(): Color {
+    return this.cloudMat.color;
   }
 
   follow(x: number, z: number): void {

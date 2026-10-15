@@ -14,7 +14,7 @@ import { shared, stableShadowSampling } from './render/materials';
 import { buildCityVisuals, type CityVisuals } from './world/cityRender';
 import { Sky } from './world/sky';
 import { DayNight } from './world/dayNight';
-import { clamp, smoothstep } from './core/math';
+import { clamp, damp, smoothstep } from './core/math';
 import { tuning } from './config/tuning';
 import { FixedLoop } from './core/loop';
 import { Input, emptyTickInput, type TickInput } from './input/input';
@@ -33,6 +33,9 @@ import { Particles } from './fx/particles';
 import { Traffic } from './life/traffic';
 import { Pedestrians } from './life/pedestrians';
 import { RingRaces } from './extras/rings';
+import { AttractMode } from './extras/attractMode';
+import { Rain } from './fx/rain';
+import { clearShot } from './camera/director';
 
 export interface GameOptions {
   seed: number;
@@ -92,15 +95,29 @@ export class Game {
   private readonly webState: WebLineState = { visible: false, progress: 0, from: new Vector3(), to: new Vector3(), slack: 0, tension: 0 };
   private readonly tmpV = new Vector3();
   private readonly tmpN = new Vector3();
-  /** What drives the camera: gameplay rig, slow menu orbit, or the photo-mode free camera. */
+  /** What drives the camera: gameplay rig, the menu's attract mode, or the photo-mode free camera. */
   view: 'play' | 'menu' | 'photo' = 'play';
+  /** The hero swinging on autopilot behind the main menu. */
+  attract!: AttractMode;
+  /** Attract mode runs in the menu view; the test API turns it off in manual mode. */
+  attractEnabled = true;
+  rain!: Rain;
+  /** Rooftop-moment look (0..1 each): rain, rainy mood grade and overcast, lightning flash. */
+  readonly weather = { rain: 0, mood: 0, flash: 0 };
+  /** Blend from the gameplay camera to a slow orbit around the hero (rooftop moment). */
+  cineOrbit = 0;
+  private orbitOn = false;
+  private orbitA = 0;
+  private orbitR = 6;
+  private readonly orbitPos = new Vector3();
+  private readonly orbitLook = new Vector3();
+  private readonly chest = new Vector3();
   /** Photo-mode free camera. */
   readonly photoCam = { pos: new Vector3(), yaw: 0, pitch: 0, fov: 70 };
   /** Called once per rendered frame (real-time loop only) after the frame is drawn. */
   onFrame: ((dt: number) => void) | null = null;
   /** Called for every simulation event (audio, HUD). */
   onPlayerEvent: ((e: PlayerEvent) => void) | null = null;
-  private menuAngle = 0.6;
   /** Fixed camera pose for screenshots (tests/photo checks). */
   cameraOverride: { x: number; y: number; z: number; tx: number; ty: number; tz: number; fov: number } | null = null;
 
@@ -151,13 +168,16 @@ export class Game {
     this.traffic = new Traffic(this.layout, QUALITY[3]!.trafficCars, this.opts.seed);
     this.peds = new Pedestrians(this.layout, QUALITY[3]!.pedestrians, this.opts.seed, (x, z) => this.world.terrain.height(x, z));
     this.rings = new RingRaces(this.layout, this.world);
+    this.attract = new AttractMode(this.world, this.layout, this.hero, this.opts.seed);
+    this.attract.onEvent = (e) => this.fxEvent(e, this.attract.player);
+    this.rain = new Rain(this.opts.seed);
     this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
     p(0.88, 'shaders');
     this.sky = new Sky(this.opts.seed);
     this.scene.add(this.sky.group);
     this.scene.add(this.visuals.group);
-    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh, this.traffic.mesh, this.peds.mesh, this.rings.mesh);
+    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh, this.traffic.mesh, this.peds.mesh, this.rings.mesh, this.rain.mesh);
     this.scene.fog = new Fog(0xb4dbf6, 300, 2000);
     this.sun = new DirectionalLight(0xffffff, 2.4);
     this.sun.castShadow = true;
@@ -190,7 +210,10 @@ export class Game {
     p(1, 'done');
     this.makeDebugHud();
     this.resize();
+    // The first frame draws a trace of rain so its buffers are uploaded during loading too.
+    this.weather.rain = 0.01;
     this.renderFrame(0);
+    this.weather.rain = 0;
   }
 
   spawn(): void {
@@ -207,6 +230,32 @@ export class Game {
     this.loop.start();
   }
 
+  /** A new game from the main menu: the hero at the spawn point with a fresh gameplay camera. */
+  startPlay(): void {
+    this.spawn();
+    this.animator.reset();
+    this.animator.perch = 0;
+    this.web.release();
+    this.rings.abandon();
+    this.cineOrbit = 0;
+    this.view = 'play';
+    // Pose the hero and the camera at the spawn right away (the frame holds still until the pointer lock).
+    this.renderPos.copy(this.player.pos);
+    this.updateCamera(1 / 60);
+    this.updateHero(0);
+  }
+
+  /** Back to the main menu: the attract hero carries on behind it. */
+  showMenu(): void {
+    this.view = 'menu';
+    this.attract.resume();
+  }
+
+  /** Whether the menu view runs the attract mode now (never in manual test mode). */
+  get attractRunning(): boolean {
+    return this.view === 'menu' && this.attractEnabled && !this.loop.manual;
+  }
+
   private makeDebugHud(): void {
     const el = document.createElement('div');
     el.style.cssText =
@@ -217,8 +266,8 @@ export class Game {
 
   /** One fixed simulation tick (real-time loop). */
   tick(dt: number): void {
-    if (!this.playing) return;
-    this.simulate(dt);
+    if (this.playing) this.simulate(dt);
+    else if (this.attractRunning) this.attract.tick(dt);
   }
 
   /** One tick driven by tests: injected input, camera updated per tick. */
@@ -263,15 +312,14 @@ export class Game {
       if (e.type === 'land' && e.impact > tuning.ground.hardLandingSpeed) this.rig.shake(e.impact);
       if (e.type === 'respawn' || e.type === 'recover') this.prevPos.copy(this.player.pos);
       this.animator.onEvent(e);
-      this.fxEvent(e);
+      this.fxEvent(e, this.player);
       this.onPlayerEvent?.(e);
     }
     if (this.eventLog.length > 200) this.eventLog.splice(0, this.eventLog.length - 200);
   }
 
-  /** Visual effects triggered by simulation events. */
-  private fxEvent(e: PlayerEvent): void {
-    const pl = this.player;
+  /** Visual effects triggered by simulation events (of the game's player or the attract hero). */
+  private fxEvent(e: PlayerEvent, pl: Player): void {
     const night = this.dayNight.night;
     switch (e.type) {
       case 'attach':
@@ -305,13 +353,15 @@ export class Game {
     }
   }
 
-  /** Hero animation, web line and particles for the current render position. */
-  updateHero(dt: number): void {
-    const pl = this.player;
-    this.animator.update(dt, this.renderPos, this.rig.yaw);
+  /**
+   * Hero animation, web line and particles for the current render position.
+   * The menu's attract mode passes its own player, animator and position.
+   */
+  updateHero(dt: number, pl: Player = this.player, anim: CharacterAnimator = this.animator, at: Vector3 = this.renderPos, yaw = this.rig.yaw): void {
+    anim.update(dt, at, yaw);
     const cam = this.rig.camera.position;
     // Never render the hero when the camera is pressed against it.
-    const d = cam.distanceTo(this.tmpV.set(this.renderPos.x, this.renderPos.y + 1.1, this.renderPos.z));
+    const d = cam.distanceTo(this.tmpV.set(at.x, at.y + 1.1, at.z));
     this.hero.mesh.visible = !this.heroHidden && d > 0.75;
     const st = this.webState;
     const rope = pl.rope;
@@ -319,15 +369,15 @@ export class Game {
       const a = rope.anchor;
       st.visible = true;
       st.progress = rope.attached ? 1 : clamp(rope.fireT / Math.max(1e-3, rope.fireDur), 0, 1);
-      st.from.copy(this.animator.handPos[rope.hand]!);
+      st.from.copy(anim.handPos[rope.hand]!);
       st.to.set(a.x, a.y, a.z);
-      const pivot = this.tmpV.set(this.renderPos.x, this.renderPos.y + tuning.body.ropeOffset, this.renderPos.z);
+      const pivot = this.tmpV.set(at.x, at.y + tuning.body.ropeOffset, at.z);
       st.slack = rope.attached ? rope.length - pivot.distanceTo(st.to) : 0;
       st.tension = rope.attached ? rope.tension : 0;
     } else if (pl.mode === MODE_ZIP) {
       st.visible = true;
       st.progress = clamp(pl.zip.time / 0.07, 0, 1);
-      st.from.copy(this.animator.handPos[pl.zip.hand]!);
+      st.from.copy(anim.handPos[pl.zip.hand]!);
       st.to.set(pl.zip.tx, pl.zip.ty, pl.zip.tz);
       st.slack = 0;
       st.tension = 1;
@@ -352,7 +402,10 @@ export class Game {
     const m = this.input.consumeMouse();
     let dt = frameDt;
     if (this.view === 'menu') {
-      this.updateMenuCamera(frameDt);
+      // Attract mode: the autopilot hero, filmed by the cinematic director.
+      const at = this.attract;
+      at.frame(alpha, frameDt, this.rig.camera);
+      this.updateHero(frameDt, at.player, at.animator, at.renderPos, at.rig.yaw);
       this.updateLife(frameDt);
       if (!this.dayNight.paused) this.dayNight.advance(frameDt, 1);
     } else if (this.view === 'photo') {
@@ -392,27 +445,15 @@ export class Game {
     this.onFrame?.(frameDt);
   }
 
-  /** Slow orbit over the park and the towers behind the main menu. */
-  private updateMenuCamera(dt: number): void {
-    this.menuAngle += dt * 0.022;
-    const P = this.layout.park;
-    const cx = (P.minX + P.maxX) / 2,
-      cz = (P.minZ + P.maxZ) / 2;
-    const cam = this.rig.camera;
-    cam.position.set(cx + Math.sin(this.menuAngle) * 560, 190, cz + Math.cos(this.menuAngle) * 560);
-    cam.fov = 55;
-    cam.lookAt(cx, 30, cz);
-    cam.updateProjectionMatrix();
-    cam.updateMatrixWorld();
-  }
-
   /** Enter photo mode: the free camera starts at the current view. */
   beginPhoto(): void {
     const cam = this.rig.camera;
     const pc = this.photoCam;
     pc.pos.copy(cam.position);
-    pc.yaw = this.rig.yaw;
-    pc.pitch = this.rig.pitch;
+    // Where the lens looks (the gameplay view, or the rooftop-moment orbit).
+    const dir = cam.getWorldDirection(this.tmpN);
+    pc.yaw = Math.atan2(-dir.x, -dir.z);
+    pc.pitch = Math.asin(clamp(dir.y, -1, 1));
     pc.fov = cam.fov;
     this.view = 'photo';
   }
@@ -476,7 +517,14 @@ export class Game {
   renderFrame(dt: number): void {
     this.time += dt;
     shared.uTime.value = this.time;
+    const wx = this.weather;
+    this.dayNight.storm = wx.mood;
+    this.dayNight.flash = wx.flash;
     this.dayNight.apply();
+    this.post.mood = wx.mood;
+    this.post.flash = wx.flash;
+    const cam0 = this.rig.camera;
+    this.rain.update(dt, wx.rain, cam0.position, (2 * Math.tan((cam0.fov * Math.PI) / 360)) / Math.max(1, this.post.internalHeight), this.dayNight.night);
     this.sky.follow(this.rig.camera.position.x, this.rig.camera.position.z);
     this.visuals.updateLod(this.rig.camera.position.x, this.rig.camera.position.z);
     this.sky.uniforms.uTime.value = this.time;
@@ -488,8 +536,11 @@ export class Game {
       if (o) {
         this.shadowFocus.set(o.tx - o.x, o.ty - o.y, o.tz - o.z).normalize().multiplyScalar(this.quality.shadowExtent * 0.8).add(cam.position);
         this.shadowFocus.y = Math.min(this.shadowFocus.y, o.ty);
+      } else if (this.view === 'menu') {
+        // Attract mode: shadows follow the hero.
+        this.shadowFocus.copy(this.attract.renderPos);
       } else if (this.view !== 'play') {
-        // Free and menu cameras: shadows cover the area in front of the lens.
+        // Free camera: shadows cover the area in front of the lens.
         cam.getWorldDirection(this.shadowFocus).multiplyScalar(this.quality.shadowExtent * 0.7).add(cam.position);
       } else this.shadowFocus.copy(this.renderPos);
       this.dayNight.placeShadow(this.sun, this.shadowFocus, this.quality.shadowExtent, this.quality.shadowMap);
@@ -523,6 +574,7 @@ export class Game {
     this.post.settings.fxaa = q.fxaa;
     this.post.settings.maxDynScale = q.maxDynScale;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatioCap));
+    this.rain.setDensity(q.rainStreaks);
     this.resize();
     this.applyLifeDensity();
   }
@@ -556,6 +608,8 @@ export class Game {
 
   updateCamera(dt: number): void {
     this.rig.update(dt, { pos: this.renderPos, vel: this.player.vel, mode: this.player.mode });
+    if (this.cineOrbit > 0.001) this.orbitCamera(dt);
+    else this.orbitOn = false;
     const o = this.cameraOverride;
     if (o) {
       const cam = this.rig.camera;
@@ -565,6 +619,36 @@ export class Game {
       cam.updateProjectionMatrix();
       cam.updateMatrixWorld();
     }
+  }
+
+  /**
+   * Rooftop moment: blend the gameplay camera into a slow orbit around the
+   * hero, starting from where the camera is. Both the orbit and the blended
+   * pose are kept out of geometry (sphere cast from the hero, sphere resolve).
+   */
+  private orbitCamera(dt: number): void {
+    const M = tuning.moment;
+    const cam = this.rig.camera;
+    const c = this.chest.set(this.renderPos.x, this.renderPos.y + 1.2, this.renderPos.z);
+    if (!this.orbitOn) {
+      this.orbitOn = true;
+      this.orbitA = Math.atan2(cam.position.z - c.z, cam.position.x - c.x);
+      this.orbitR = Math.max(2.5, Math.hypot(cam.position.x - c.x, cam.position.z - c.z));
+    }
+    this.orbitA += M.orbitSpeed * dt;
+    this.orbitR = damp(this.orbitR, M.orbitRadius, 0.6, dt);
+    const w = smoothstep(0, 1, this.cineOrbit);
+    const op = this.orbitPos.set(c.x + Math.cos(this.orbitA) * this.orbitR, c.y + M.orbitHeight, c.z + Math.sin(this.orbitA) * this.orbitR);
+    clearShot(this.world, c, op);
+    // Gameplay look point, then the blend toward the orbit.
+    this.orbitLook.copy(cam.position).addScaledVector(this.rig.fwd, 10).lerp(c, w);
+    cam.position.lerp(op, w);
+    clearShot(this.world, c, cam.position);
+    cam.fov += (52 - cam.fov) * w;
+    cam.up.set(0, 1, 0);
+    cam.lookAt(this.orbitLook);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
   }
 
   resize(): void {

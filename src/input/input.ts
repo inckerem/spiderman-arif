@@ -25,6 +25,11 @@ export interface TickInput {
   aimDir: Vector3;
 }
 
+/** Mouse travel (px, decaying with a 0.3 s time constant) that counts as deliberate movement. */
+export const LOOK_ACTIVITY_PX = 140;
+/** Actions whose keys never count as activity: they work during the rooftop moment without ending it. */
+const QUIET_ACTIONS: readonly Action[] = ['music', 'photo'];
+
 export function emptyTickInput(): TickInput {
   return {
     moveX: 0,
@@ -66,6 +71,16 @@ export class Input {
   pointerLocked = false;
   /** Gameplay input is ignored while false (menus open). */
   enabled = false;
+  /**
+   * Counts deliberate input for idle detection (the rooftop moment): key and
+   * mouse-button presses, wheel notches, touches and a deliberate mouse
+   * movement. Mouse jitter never counts: movement adds up with a 0.3 s decay
+   * and only crossing LOOK_ACTIVITY_PX counts. Keys bound only to the quiet
+   * actions (music toggle, photo mode) do not count either.
+   */
+  activity = 0;
+  private lookTravel = 0;
+  private lookAt = 0;
   private keyListeners: Array<(code: string, e: KeyboardEvent) => void> = [];
   private actionListeners: Array<(action: Action, e: KeyboardEvent | MouseEvent) => void> = [];
   private settleUntil = 0;
@@ -81,6 +96,9 @@ export class Input {
     window.addEventListener('mousemove', this.onMouseMove);
     element.addEventListener('wheel', this.onWheel, { passive: false });
     element.addEventListener('contextmenu', (e) => e.preventDefault());
+    window.addEventListener('pointerdown', this.bump, true);
+    window.addEventListener('touchstart', this.bump, { capture: true, passive: true });
+    window.addEventListener('wheel', this.bump, { capture: true, passive: true });
     // Middle-click paste and the back/forward side buttons must not act while playing.
     window.addEventListener('auxclick', (e) => {
       if (this.pointerLocked) e.preventDefault();
@@ -207,6 +225,7 @@ export class Input {
       (this.pointerLocked && this.bound.has(e.code));
     if (gameKey && !(e.target instanceof HTMLInputElement)) e.preventDefault();
     if (!e.repeat) {
+      if (!this.quiet(e.code)) this.activity++;
       this.held.add(e.code);
       this.pressedSinceTick.add(e.code);
       for (const l of this.keyListeners) l(e.code, e);
@@ -252,7 +271,26 @@ export class Input {
     const dy = Math.abs(e.movementY) > 600 ? 0 : e.movementY;
     this.mouseDX += dx;
     this.mouseDY += dy;
+    const now = performance.now();
+    this.lookTravel = this.lookTravel * Math.exp(-(now - this.lookAt) / 300) + Math.abs(dx) + Math.abs(dy);
+    this.lookAt = now;
+    if (this.lookTravel > LOOK_ACTIVITY_PX) {
+      this.lookTravel = 0;
+      this.activity++;
+    }
   };
+
+  private bump = (): void => {
+    this.activity++;
+  };
+
+  /** True for a key bound only to quiet actions (an unbound key is not quiet). */
+  private quiet(code: string): boolean {
+    const actions = actionsForCode(this.bindings, code);
+    if (actions.length === 0) return false;
+    for (const a of actions) if (!QUIET_ACTIONS.includes(a)) return false;
+    return true;
+  }
 
   private onWheel = (e: WheelEvent): void => {
     if (!this.pointerLocked) return;

@@ -23,6 +23,10 @@ import {
   ropeTest,
   stepWithInput,
   traversalBot,
+  attractTest,
+  momentFrames,
+  momentRoof,
+  momentState,
   type BotInput,
 } from './testDrivers';
 
@@ -43,6 +47,8 @@ export function installTestApi(game: Game, app?: App): void {
     app,
     setManual(on: boolean): void {
       game.loop.manual = on;
+      // The menu's attract mode never runs while tests step the game by hand.
+      game.attractEnabled = !on;
       game.playing = true;
       game.view = 'play';
       // Deterministic stepping: the UI overlay is hidden unless a test shows it.
@@ -154,6 +160,12 @@ export function installTestApi(game: Game, app?: App): void {
     soakMinute: (minute: number) => soakMinute(game, app, minute),
     tunnelTest: (trials = 300) => tunnelTest(game, trials),
     lifeTest: () => lifeTest(game),
+    /** Attract mode headless (dev-only hook; the real loop never runs it in manual mode). */
+    attractTest: (seconds = 240, seed = 1) => attractTest(game, seconds, seed),
+    momentRoof: () => momentRoof(game),
+    momentState: () => (app ? momentState(game, app) : null),
+    /** Frames of play with the held input (the app's per-frame update drives the rooftop moment). */
+    momentFrames: (seconds: number, sample = 0) => (app ? momentFrames(game, app, held, prev, seconds, sample) : null),
     updateLife: (dt = 1 / 60) => game.updateLife(dt),
     simTiming(): { msPerTick: number; ticks: number } {
       return { msPerTick: game.simTimeMs / Math.max(1, game.simTicksMeasured), ticks: game.simTicksMeasured };

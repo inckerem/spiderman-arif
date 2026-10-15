@@ -38,7 +38,7 @@ npm run build        # type-check + bundle into dist/
 npm run preview      # http://127.0.0.1:4173
 ```
 
-Click **Oyna** (Play) to start; the game captures the mouse (pointer lock). Audio starts after the first click or key press. Press `Esc` to pause. URL parameter `?seed=1234` generates a different city.
+Behind the main menu the hero swings through the city on autopilot, filmed by a cinematic camera that cuts between chase, side, low-angle, aerial and orbit shots (attract mode; not playable). Click **Oyna** (Play) to start: the hero begins on the spawn roof and the game captures the mouse (pointer lock). Audio starts after the first click or key press. Press `Esc` to pause; **Ana Menü** in the pause menu goes back to the attract mode. URL parameter `?seed=1234` generates a different city.
 
 ## Controls
 
@@ -52,7 +52,7 @@ Click **Oyna** (Play) to start; the game captures the mouse (pointer lock). Audi
 | Shift (hold) | Sprint on the ground; cling to and climb walls |
 | C or Q | Dive in the air (trades height for speed) |
 | Mouse wheel | Reel the line in or out while swinging |
-| M | Music on/off |
+| M | Music on/off (music plays in the menus and in the rooftop moment only) |
 | P | Photo mode (free camera: WASD, mouse, Space/C up/down, Shift fast) |
 | T | Pause or resume the day-night cycle |
 | Y (hold) | Fast-forward time |
@@ -68,7 +68,7 @@ Lines go exactly where the crosshair points (a ring of rays 2.5 degrees around i
 
 Costumes: **Kostüm** in the main menu or the pause menu dresses the hero in one of four suits (Kırmızı-Lacivert, Kırmızı-Altın, Siyah-Altın, Siyah-Beyaz); the pick is worn at once and saved with the settings.
 
-Tips: let go on the rising part of a swing while the crosshair pulses for a launch bonus ("MÜKEMMEL BIRAKIŞ!"); fire a line right after a dive to carry the speed into the swing. Fly through the first ring of a route (park, towers, waterfront) to start a timed run; best times are saved.
+Tips: let go on the rising part of a swing while the crosshair pulses for a launch bonus ("MÜKEMMEL BIRAKIŞ!"); fire a line right after a dive to carry the speed into the swing. Fly through the first ring of a route (park, towers, waterfront) to start a timed run; best times are saved. Stand still on a rooftop for five seconds (no keys, no race running) for the rooftop moment: the music fades in, the sky runs through dusk into night, rain sets in, the HUD gives way to letterbox bars and the camera circles the crouching hero. Any key, mouse button or a deliberate mouse movement brings everything back (rain off, the time of day where it was); M and the photo key work without ending it, and photo mode can capture it.
 
 ## Tuning guide
 
@@ -86,8 +86,9 @@ Every gameplay constant lives in `src/config/tuning.ts`, grouped by system. The 
 | `camera` | Spring-arm camera | `armGround` / `armAir` / `armFast`, `shoulder`, FOV range by speed, follow stiffness (`airFollowFreq`, `airVelSmooth`, `lagStiffen`), auto-follow (`autoYawRate`, `autoYawDelay`), look-ahead, shake |
 | `recovery` | Stuck detection and safe recovery | `stuckTime`, `deepPenetration`, `blendTime` |
 | `world`, `time` | Water level, soft boundary, day length and start hour | `softBoundaryAccel`, `dayLengthMinutes` |
+| `moment` | Rooftop moment: trigger, time-lapse, rain, fades, orbit camera, lightning | `idleSeconds`, `minRoofHeight`, `nightHour`, `toNightSeconds`, `orbitRadius` |
 
-Render quality presets (shadow map, view distance, traffic and crowd density, FXAA, pixel-ratio cap) are in `src/config/quality.ts`; the in-game settings screen picks one and persists the choice.
+Render quality presets (shadow map, view distance, traffic and crowd density, rain streaks, FXAA, pixel-ratio cap) are in `src/config/quality.ts`; the in-game settings screen picks one and persists the choice.
 
 ## Tests
 
@@ -105,11 +106,12 @@ npm run test:quick               # smoke test only
 | b `fuzz.spec.ts` | 12 simulated minutes of random input over 6 seeds: never inside geometry, below ground, out of bounds, NaN or stuck, camera never inside geometry; head-on 95 m/s impacts never tunnel |
 | c `anchors.spec.ts` | Anchor availability from 500 street, rooftop and park positions (>= 95 %) |
 | d `traversal.spec.ts` | Corner-to-corner city bot and tree-to-tree park bot spend < 10 % of the time on the ground |
-| e `soak.spec.ts` | 30 simulated minutes of mixed play: clean console, no heap growth trend, no GPU resource growth |
+| e `soak.spec.ts` | 30 simulated minutes of mixed play (including attract mode and a rooftop-moment cycle with rain every minute): clean console, no heap growth trend, no GPU resource growth |
 | f `character.spec.ts` | Planted feet never slide, limbs stay out of geometry (including the hard-landing crouch), bones stay finite; strong releases do air tricks, which end on landing |
-| g `ui.spec.ts` | Settings round trip and corrupt storage, costume picker (worn at once, arrow keys, saved across reloads), audio unlock and music decode, mute, pause on lock loss, resume, photo PNG export; g2: dynamic resolution drops under load and returns to full at 60 Hz |
+| g `ui.spec.ts` | Settings round trip and corrupt storage, costume picker (worn at once, arrow keys, saved across reloads), audio unlock and music decode (music in the menu, none in play), mute, pause on lock loss, resume, photo PNG export; g2: dynamic resolution drops under load and returns to full at 60 Hz |
 | h `rings.spec.ts` | Ring routes clear and reachable, race logic and best times; traffic on roads with stops and turns; pedestrians off the carriageway |
 | i `keybindings.spec.ts` | Rebinding with keys and mouse buttons (conflicts, cancel, clear, reserved keys, no click-through, arrow-key navigation), controls screen and photo panel follow the bindings, the game reacts to the new keys only, persistence and corrupt storage (including codes named like `toString`) |
+| j `attract.spec.ts` | j1: the menu autopilot runs 6 simulated minutes headless: never stuck, in water, below ground, inside geometry or NaN, little ground time, long distance, swings, pull lines, wall runs and perches; the cinematic camera never inside geometry with the hero in frame. j2: the rooftop moment starts only after 5 s still on a roof (not on the street, not while moving, not during a race), brings music, night, rain, letterbox and the orbit camera, holds while paused and through M and mouse jitter, and a key, a deliberate mouse movement or a click restores the music, rain, HUD and the exact hour |
 | `smoke.spec.ts` | Page loads with a clean console and no request leaves the origin |
 
 Numbers from each run are written to `test-results/*.json`. Software GL in a sandbox does not represent real GPU frame rates, so the suite measures simulation time per tick, draw calls, triangles and memory instead of FPS.
@@ -126,20 +128,20 @@ src/
   core/             fixed-step loop, seeded RNG, math helpers
   input/            keyboard and mouse state, rebindable key bindings
   physics/          analytic collision world (boxes, cylinders, ellipsoids, terrain, water), grid, raycasts
-  player/           player state machine, rope constraint, targeting with assist
-  camera/           spring-arm camera with collision
+  player/           player state machine, rope constraint, targeting with assist, autopilot (bot play shared by the menu and the test bots)
+  camera/           spring-arm camera with collision, cinematic director (menu)
   world/            city generator, collision proxies, chunked city visuals, sky, day-night
   render/           cel materials, outline post-process, FXAA, dynamic resolution
   character/        procedural humanoid and costumes, animator (gait IK, poses, tricks, limb collision), web line
-  fx/               particles
+  fx/               particles, rain streaks
   life/             traffic and pedestrians
-  extras/           ring races
+  extras/           ring races, attract mode, rooftop moment
   audio/            music loop and synthesized SFX and ambience
   ui/               menus, HUD, minimap, settings persistence, photo panel
   i18n/tr.ts        all in-game text (Turkish)
   debug/            tuning panel, test API and in-page test drivers
 docs/               spec, architecture, milestones, decisions
-tests/              Playwright specs a-i, smoke, soak
+tests/              Playwright specs a-j, smoke, soak
 public/audio/       theme.mp3 (the user's music track)
 ```
 

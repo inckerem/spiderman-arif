@@ -102,6 +102,54 @@ canvas#game {
   display: block;
 }
 
+/* Rooftop moment: the HUD fades out while the letterbox bars slide in. */
+.sk-hud {
+  transition: opacity 0.9s ease;
+}
+
+.sk-cine .sk-hud {
+  opacity: 0;
+}
+
+.sk-letterbox {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.sk-lb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 11.5vh;
+  background: #050608;
+  transition: transform 1.4s cubic-bezier(0.22, 0.7, 0.2, 1);
+}
+
+.sk-lb-top {
+  top: 0;
+  transform: translateY(-100%);
+}
+
+.sk-lb-bottom {
+  bottom: 0;
+  transform: translateY(100%);
+}
+
+.sk-cine .sk-lb {
+  transform: none;
+}
+
+/* Photo mode frames its own picture. */
+.sk-photo-open .sk-lb-top {
+  transform: translateY(-100%);
+}
+
+.sk-photo-open .sk-lb-bottom {
+  transform: translateY(100%);
+}
+
 /* Crosshair */
 .sk-xh {
   position: absolute;

@@ -3,84 +3,21 @@ import { tuning } from '../config/tuning';
 import { Rng } from '../core/rng';
 import type { Game } from '../game';
 import type { App } from '../app';
-import { BOX, CYL, F_ANCHOR, makeRayHit } from '../physics/collision';
+import { BOX, CYL, F_ANCHOR, F_CAMERA, makeRayHit } from '../physics/collision';
+import { SHOT_NAMES } from '../camera/director';
 import { MODE_GROUND, MODE_SWING, MODE_NAMES, MODE_WALL, MODE_ZIP } from '../player/player';
-import { makeAnchorResult, type AnchorResult } from '../player/targeting';
+import { makeAnchorResult } from '../player/targeting';
+import { SwingBrain, aimAt, aimForClick, emptyBotInput, fillTickInput, planTarget, routeTarget, type BotInput } from '../player/autopilot';
 
-/** Injected input for tests; booleans are levels, edges are derived per tick. */
-export interface BotInput {
-  moveX: number;
-  moveY: number;
-  jump: boolean;
-  sprint: boolean;
-  dive: boolean;
-  swing: boolean;
-  zip: boolean;
-  reel: number;
-}
-
-export function emptyBotInput(): BotInput {
-  return { moveX: 0, moveY: 0, jump: false, sprint: false, dive: false, swing: false, zip: false, reel: 0 };
-}
-
-const v3 = new Vector3();
+// The bot play (input levels, aiming, the swing brain) ships in production
+// for the menu autopilot; the drivers below use the same code.
+export { aimAt, aimForClick, emptyBotInput, planTarget, type BotInput };
 
 /** Run one tick with injected input (edges derived from the previous levels). */
 export function stepWithInput(game: Game, inp: BotInput, prev: BotInput): void {
-  const t = game.tickInput;
-  game.injectInput = (out) => {
-    out.moveX = inp.moveX;
-    out.moveY = inp.moveY;
-    out.jump = inp.jump;
-    out.jumpPressed = inp.jump && !prev.jump;
-    out.sprint = inp.sprint;
-    out.dive = inp.dive;
-    out.swing = inp.swing;
-    out.swingPressed = inp.swing && !prev.swing;
-    out.swingReleased = !inp.swing && prev.swing;
-    out.zip = inp.zip;
-    out.zipPressed = inp.zip && !prev.zip;
-    out.reel = inp.reel;
-  };
+  game.injectInput = (out) => fillTickInput(out, inp, prev);
   game.manualTick();
   Object.assign(prev, inp);
-  void t;
-}
-
-/** Points the crosshair at (x, y, z) without advancing the camera follow; a few passes converge. */
-export function aimAt(game: Game, x: number, y: number, z: number): void {
-  const rig = game.rig;
-  const feet = game.player.pos;
-  for (let i = 0; i < 4; i++) {
-    rig.refreshPose(feet);
-    const c = rig.position;
-    const dx = x - c.x,
-      dy = y - c.y,
-      dz = z - c.z;
-    rig.setLook(Math.atan2(-dx, -dz), Math.atan2(dy, Math.hypot(dx, dz)));
-  }
-  rig.refreshPose(feet);
-}
-
-/** The anchor a player would aim at next from the current view (wide search), for bots. */
-export function planTarget(game: Game, mode: 0 | 1, out: AnchorResult): boolean {
-  const pl = game.player;
-  const r = game.rig;
-  return pl.targeting.plan(mode, pl.pos.x, pl.pos.y, pl.pos.z, r.position.x, r.position.y, r.position.z, r.fwd.x, r.fwd.y, r.fwd.z, out);
-}
-
-/**
- * Aims at the planned anchor and presses the button for the next step (the
- * caller clears the press afterwards). Returns the view to restore after that
- * step so steering continues smoothly, or null when nothing is in view.
- */
-export function aimForClick(game: Game, mode: 0 | 1, inp: BotInput, target: AnchorResult): [number, number] | null {
-  if (!planTarget(game, mode, target)) return null;
-  const view: [number, number] = [game.rig.yaw, game.rig.pitch];
-  aimAt(game, target.x, target.y, target.z);
-  if (mode === 0) inp.swing = true;
-  else inp.zip = true;
-  return view;
 }
 
 // -----------------------------------------------------------------------------
@@ -563,18 +500,11 @@ export function traversalBot(
   game.rig.setLook(Math.atan2(-(first[0] - start[0]), -(first[1] - start[1])), 0.2);
   game.snapCamera();
   game.prevPos.copy(pl.pos);
-  const inp = emptyBotInput();
-  const prev = emptyBotInput();
-  const target = makeAnchorResult();
-  let lastTry = -99;
-  let seg = 0;
+  const brain = new SwingBrain(game);
+  const follow = { seg: 0, x: 0, z: 0 };
   let ticks = 0,
     groundTicks = 0;
-  let swings = 0,
-    good = 0;
   const startStats = { ...pl.stats };
-  let state: 'run' | 'swing' | 'fly' = 'run';
-  let stateT = 0;
   let distance = 0;
   const last = new Vector3().copy(pl.pos);
   let maxAlt = 0,
@@ -585,103 +515,19 @@ export function traversalBot(
   let reached = false;
   const maxTicks = maxSeconds * 120;
   while (ticks < maxTicks) {
-    // Advance along the route.
+    // Advance along the route; look-ahead target 70 m along it.
     const p = pl.pos;
-    while (seg < route.length - 1) {
-      const a = route[seg]!,
-        b = route[seg + 1]!;
-      const abx = b[0] - a[0],
-        abz = b[1] - a[1];
-      const l2 = abx * abx + abz * abz;
-      const t = ((p.x - a[0]) * abx + (p.z - a[1]) * abz) / l2;
-      if (t > 0.98) seg++;
-      else break;
-    }
+    routeTarget(route, route.length, p.x, p.z, 70, follow);
     if (Math.hypot(p.x - goal[0], p.z - goal[1]) < 40) {
       reached = true;
       break;
     }
-    // Look-ahead target 70 m along the route.
-    const a = route[seg]!,
-      b = route[Math.min(route.length - 1, seg + 1)]!;
-    const abx = b[0] - a[0],
-      abz = b[1] - a[1];
-    const ab = Math.hypot(abx, abz) || 1;
-    const t = Math.max(0, ((p.x - a[0]) * abx + (p.z - a[1]) * abz) / ab);
-    let tx = a[0] + (abx / ab) * Math.min(ab, t + 70);
-    let tz = a[1] + (abz / ab) * Math.min(ab, t + 70);
-    if (t + 70 > ab && seg + 2 < route.length) {
-      const c = route[seg + 2]!;
-      const over = t + 70 - ab;
-      const bcx = c[0] - b[0],
-        bcz = c[1] - b[1];
-      const bc = Math.hypot(bcx, bcz) || 1;
-      tx = b[0] + (bcx / bc) * Math.min(bc, over);
-      tz = b[1] + (bcz / bc) * Math.min(bc, over);
-    }
-    // Pull back toward the route line when drifting sideways.
-    const yawTarget = Math.atan2(-(tx - p.x), -(tz - p.z));
-    let dy = yawTarget - game.rig.yaw;
-    while (dy > Math.PI) dy -= Math.PI * 2;
-    while (dy < -Math.PI) dy += Math.PI * 2;
-    const pitchT = 0.34;
-    game.rig.setLook(game.rig.yaw + dy * 0.08, game.rig.pitch + (pitchT - game.rig.pitch) * 0.1);
-
-    inp.moveY = 1;
-    inp.moveX = 0;
-    inp.sprint = true;
-    inp.jump = false;
-    inp.dive = false;
-    stateT += 1 / 120;
-    const rope = pl.rope;
-    let fire = false;
-    if (pl.mode === MODE_SWING) {
-      if (state !== 'swing') {
-        state = 'swing';
-        stateT = 0;
-        swings++;
-      }
-      inp.swing = true;
-      const v = pl.vel;
-      // Let go on the rising arc (visible cue), or when past the anchor, or after a while.
-      const past = rope.attached && (v.x * (rope.anchor.x - p.x) + v.z * (rope.anchor.z - p.z)) < 0;
-      // Swing angle from straight down: cut later on the arc when low (to gain height).
-      const ax = p.x - rope.anchor.x,
-        ay = p.y + tuning.body.ropeOffset - rope.anchor.y,
-        az = p.z - rope.anchor.z;
-      const ang = (Math.acos(Math.max(-1, Math.min(1, -ay / (Math.hypot(ax, ay, az) || 1)))) * 180) / Math.PI;
-      const wantAngle = p.y < 30 ? 38 : 18;
-      const goodNow = rope.goodWindow && ang >= wantAngle;
-      if (rope.attached && (goodNow || (past && v.y > 0 && stateT > 0.8) || stateT > 3.2)) {
-        if (rope.goodWindow) good++;
-        inp.swing = false;
-        state = 'fly';
-        stateT = 0;
-      }
-    } else {
-      inp.swing = false;
-      if (state === 'swing') {
-        state = 'fly';
-        stateT = 0;
-      }
-      if (state === 'fly') {
-        // Re-attach once falling, or right away when close to the ground.
-        fire = (pl.vel.y < -0.5 && stateT > 0.12) || (p.y < 4 && pl.vel.y < 2) || stateT > 1.4;
-        if (pl.mode === MODE_GROUND) state = 'run';
-      } else {
-        // On the ground: run and try to swing.
-        fire = true;
-        inp.jump = ticks % 50 === 0;
-      }
-    }
-    // Aim at the next anchor and press; retry every few ticks while nothing is in view.
-    let view: [number, number] | null = null;
-    if (fire && !prev.swing && ticks - lastTry >= 3) {
-      lastTry = ticks;
-      view = aimForClick(game, 0, inp, target);
-    }
-    stepWithInput(game, inp, prev);
-    if (view) game.rig.setLook(view[0], view[1]);
+    // Pull back toward the route line when drifting sideways, then swing (shared brain).
+    brain.steer(follow.x, follow.z);
+    brain.choose();
+    brain.press();
+    stepWithInput(game, brain.inp, brain.prev);
+    brain.after();
     if (diag) {
       for (const e of pl.events) {
         if (e.type === 'attach') {
@@ -718,8 +564,8 @@ export function traversalBot(
     groundFraction: groundTicks / Math.max(1, ticks),
     distance,
     avgSpeed: distance / Math.max(0.01, seconds),
-    swings,
-    goodReleases: good,
+    swings: brain.swings,
+    goodReleases: brain.goodReleases,
     splashes: pl.stats.splashes - startStats.splashes,
     recoveries: pl.stats.recoveries - startStats.recoveries,
     maxAltitude: maxAlt,
@@ -760,8 +606,6 @@ export function parkRoute(game: Game): Array<[number, number]> {
     [(P.minX + P.maxX) / 2, P.minZ + 12],
   ];
 }
-
-void v3;
 
 // -----------------------------------------------------------------------------
 // Extra swing checks: catch conversion and re-attach latency
@@ -1563,6 +1407,8 @@ export function lifeTest(game: Game): Record<string, unknown> {
 // e. Soak: one simulated minute of mixed play per call
 // -----------------------------------------------------------------------------
 
+const soakPixel = new Uint8Array(4);
+
 export function soakMinute(game: Game, app: App | undefined, minute: number): Record<string, number> {
   const TICKS = 7200;
   let ticks = 0;
@@ -1591,6 +1437,25 @@ export function soakMinute(game: Game, app: App | undefined, minute: number): Re
     game.view = 'play';
     game.playing = true;
   }
+  // Attract mode behind the menu (10 simulated seconds) and a full rooftop-moment cycle (rain in, any input, back).
+  if (app) {
+    game.view = 'menu';
+    const at = game.attract;
+    for (let i = 0; i < 1200; i++) {
+      at.tick(game.loop.dt);
+      if (i % 2 === 1) at.frame(1, game.loop.dt * 2, game.rig.camera);
+      if (i % 480 === 0) game.renderOnce();
+    }
+    game.view = 'play';
+    // HUD off: 720 app frames would redraw the minimap canvas each time (GPU work the soak does not need).
+    app.ui.setHudVisible(false);
+    momentRoof(game);
+    const still = emptyBotInput(),
+      prevStill = emptyBotInput();
+    momentFrames(game, app, still, prevStill, 8, 0, 4);
+    game.input.activity++;
+    momentFrames(game, app, still, prevStill, 4, 0, 4);
+  }
   const kind = minute % 5;
   if (kind === 0) traversalBot(game, 'city', cityRoute(game), 60, undefined, false, hook);
   else if (kind === 2) traversalBot(game, 'park', parkRoute(game), 60, undefined, false, hook);
@@ -1608,6 +1473,9 @@ export function soakMinute(game: Game, app: App | undefined, minute: number): Re
     if (k % 2 === 0) game.renderOnce();
   }
   if (qualitySwitch) game.applyQuality(1);
+  // Wait for the GPU to finish this minute's frames, so software GL never builds up a backlog.
+  const gl = game.renderer.getContext();
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, soakPixel);
   const info = game.renderer.info;
   return {
     ticks,
@@ -1679,4 +1547,220 @@ export function tunnelTest(game: Game, trials: number): Record<string, number> {
     if (passed) tunneled++;
   }
   return { tried, posts, walls, tunneled, insideTicks: inside };
+}
+
+// -----------------------------------------------------------------------------
+// M9. Attract mode (menu autopilot) and the rooftop moment
+// -----------------------------------------------------------------------------
+
+/**
+ * Runs the menu's attract mode headless for `seconds` of simulation (the
+ * director films every second tick, as at 60 fps) and checks the hero and
+ * the camera: stuck, water, below ground, inside geometry, NaN, ground time,
+ * distance, swings and variety; camera inside geometry, hero in frame.
+ */
+export function attractTest(game: Game, seconds: number, seed = 1): Record<string, unknown> {
+  const at = game.attract;
+  at.restart(seed);
+  const pl = at.player;
+  const ap = at.autopilot;
+  const w = game.world;
+  const terr = w.terrain;
+  const dt = game.loop.dt;
+  const cam = game.rig.camera;
+  const r = tuning.body.radius,
+    h = tuning.body.height;
+  const ticks = Math.round(seconds * 120);
+  const start = { ...pl.stats };
+  const apStart = { ...ap.stats };
+  const swings0 = ap.brain.swings,
+    good0 = ap.brain.goodReleases;
+  const ds = at.director.stats;
+  const dir0 = { cuts: ds.cuts, blends: ds.blends, shots: ds.shots.slice() };
+  const anchor = new Vector3().copy(pl.pos);
+  const last = new Vector3().copy(pl.pos);
+  const chest = new Vector3();
+  const ndc = new Vector3();
+  const hit = makeRayHit();
+  let noProgress = 0,
+    maxNoProgress = 0,
+    stuckOver3s = 0,
+    inWater = 0,
+    belowGround = 0,
+    inside = 0,
+    maxPen = 0,
+    nan = 0,
+    groundTicks = 0,
+    perchTicks = 0,
+    distance = 0,
+    frames = 0,
+    camInside = 0,
+    maxCamPen = 0,
+    inFrame = 0,
+    occluded = 0,
+    maxSpeed = 0;
+  const kinds = [0, 0, 0];
+  const modeTicks: Record<string, number> = {};
+  const t0 = performance.now();
+  for (let i = 0; i < ticks; i++) {
+    at.tick(dt);
+    const p = pl.pos;
+    if (!Number.isFinite(p.x + p.y + p.z + pl.vel.x + pl.vel.y + pl.vel.z)) nan++;
+    if (terr.isWater(p.x, p.z) && p.y < terr.waterLevelAt(p.x, p.z) + 0.05) inWater++;
+    if (!terr.isWater(p.x, p.z) && p.y < terr.height(p.x, p.z) - 0.03) belowGround++;
+    const pen = w.capsulePenetration(p.x, p.y, p.z, r, h);
+    if (pen > maxPen) maxPen = pen;
+    if (pen > 0.03) inside++;
+    const mn = MODE_NAMES[pl.mode]!;
+    modeTicks[mn] = (modeTicks[mn] ?? 0) + 1;
+    if (ap.perching) perchTicks++;
+    else if (pl.mode === MODE_GROUND) groundTicks++;
+    const step = p.distanceTo(last);
+    if (step < 5) distance += step;
+    last.copy(p);
+    maxSpeed = Math.max(maxSpeed, pl.speed);
+    if (i % 120 === 0) kinds[ap.goal.kind]!++;
+    // Stuck: no 0.3 m of movement for 3 s while not perching on purpose.
+    if (p.distanceTo(anchor) > 0.3 || ap.perching) {
+      anchor.copy(p);
+      noProgress = 0;
+    } else {
+      noProgress += dt;
+      maxNoProgress = Math.max(maxNoProgress, noProgress);
+      if (noProgress > 3) {
+        stuckOver3s++;
+        noProgress = 0;
+      }
+    }
+    if (i % 2 === 1) {
+      at.frame(1, dt * 2, cam);
+      frames++;
+      const cp = cam.position;
+      const cpen = w.spherePenetration(cp.x, cp.y, cp.z, 0.2);
+      if (cpen > maxCamPen) maxCamPen = cpen;
+      if (cpen > 0.02) camInside++;
+      chest.set(at.renderPos.x, at.renderPos.y + 1.1, at.renderPos.z);
+      ndc.copy(chest).project(cam);
+      if (ndc.z < 1 && Math.abs(ndc.x) < 1 && Math.abs(ndc.y) < 1) inFrame++;
+      const dx = chest.x - cp.x,
+        dy = chest.y - cp.y,
+        dz = chest.z - cp.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d > 1 && w.raycast(cp.x, cp.y, cp.z, dx / d, dy / d, dz / d, d - 0.8, hit, 0, -1, 0, false, F_CAMERA)) occluded++;
+    }
+  }
+  const msPerTick = (performance.now() - t0) / ticks;
+  const air = ticks - perchTicks;
+  const st = ap.stats;
+  return {
+    seconds,
+    msPerTick,
+    stuckOver3s,
+    maxNoProgress,
+    splashes: pl.stats.splashes - start.splashes,
+    inWater,
+    belowGround,
+    insideGeometry: inside,
+    maxPenetration: maxPen,
+    nan,
+    groundFraction: groundTicks / Math.max(1, air),
+    perchFraction: perchTicks / ticks,
+    distance,
+    avgSpeed: distance / seconds,
+    maxSpeed,
+    swings: ap.brain.swings - swings0,
+    swingsPerMinute: ((ap.brain.swings - swings0) * 60) / seconds,
+    goodReleases: ap.brain.goodReleases - good0,
+    legs: st.legs - apStart.legs,
+    zips: st.zips - apStart.zips,
+    wallRuns: st.wallRuns - apStart.wallRuns,
+    dives: st.dives - apStart.dives,
+    perches: st.perches - apStart.perches,
+    reroutes: st.reroutes - apStart.reroutes,
+    rescues: st.rescues - apStart.rescues,
+    recoveries: pl.stats.recoveries - start.recoveries,
+    goalKindSeconds: { roof: kinds[0], park: kinds[1], waterfront: kinds[2] },
+    modeTicks,
+    camera: {
+      frames,
+      inside: camInside,
+      maxPenetration: maxCamPen,
+      heroInFrame: inFrame / Math.max(1, frames),
+      occluded: occluded / Math.max(1, frames),
+      cuts: ds.cuts - dir0.cuts,
+      blends: ds.blends - dir0.blends,
+      shots: Object.fromEntries(SHOT_NAMES.map((n, i) => [n, ds.shots[i]! - dir0.shots[i]!])),
+    },
+  };
+}
+
+/** A big, mid-height roof to stand on for the rooftop-moment test: feet position and street height below. */
+export function momentRoof(game: Game): Record<string, number> {
+  const pl = game.player;
+  const out = new Vector3();
+  let best: { x: number; y: number; z: number; area: number } | null = null;
+  for (const b of game.layout.buildings) {
+    const v = b.volumes[b.volumes.length - 1]!;
+    const area = (v.maxX - v.minX) * (v.maxZ - v.minZ);
+    if (v.maxY < 25 || v.maxY > 90 || area < 600) continue;
+    if (!best || area > best.area) best = { x: (v.minX + v.maxX) / 2, y: v.maxY, z: (v.minZ + v.maxZ) / 2, area };
+  }
+  if (!best || !pl.findSafeSpot(best.x, best.y + 1, best.z, out)) throw new Error('no roof for the moment test');
+  pl.teleport(out.x, out.y, out.z);
+  game.prevPos.copy(pl.pos);
+  game.snapCamera();
+  return { x: out.x, y: out.y, z: out.z, street: game.world.terrain.height(out.x, out.z) };
+}
+
+/** Rooftop-moment state for the tests. */
+export function momentState(game: Game, app: App): Record<string, unknown> {
+  const m = app.moment;
+  return {
+    phase: m.phase,
+    idleT: m.idleT,
+    savedHour: m.savedHour,
+    hour: game.dayNight.hour,
+    hold: game.dayNight.hold,
+    rain: game.weather.rain,
+    rainVisible: game.rain.mesh.visible,
+    mood: game.weather.mood,
+    storm: game.dayNight.storm,
+    orbit: game.cineOrbit,
+    perch: game.animator.perch,
+    music: m.music,
+    musicPresence: app.audio.musicPresence,
+    musicMuted: app.audio.musicMuted,
+    cinematic: app.ui.cinematic,
+    rootCine: document.querySelector('.sk-ui')?.classList.contains('sk-cine') ?? false,
+    starts: m.stats.starts,
+    ends: m.stats.ends,
+    bolts: m.stats.bolts,
+    mode: MODE_NAMES[game.player.mode],
+    speed: game.player.speed,
+    pos: [game.player.pos.x, game.player.pos.y, game.player.pos.z],
+  };
+}
+
+/**
+ * Plays `seconds` of the game as 60 fps frames (two ticks with the held test
+ * input, then the app's frame update), the way the real loop drives the
+ * rooftop moment, rendering one frame every `renderEvery` simulated seconds.
+ * `sample` > 0 records the state every `sample` seconds.
+ */
+export function momentFrames(game: Game, app: App, inp: BotInput, prev: BotInput, seconds: number, sample = 0, renderEvery = 1): Record<string, unknown> {
+  const frames = Math.round(seconds * 60);
+  const samples: Array<Record<string, unknown>> = [];
+  let maxPhase = 'idle';
+  const order = ['idle', 'arming', 'in', 'active', 'out'];
+  const frame = (app as unknown as { frame(dt: number): void }).frame.bind(app);
+  for (let f = 0; f < frames; f++) {
+    stepWithInput(game, inp, prev);
+    stepWithInput(game, inp, prev);
+    frame(1 / 60);
+    // A rendered frame every `renderEvery` simulated seconds (software GL is slow); the last frame always renders.
+    if (f % Math.round(renderEvery * 60) === Math.round(renderEvery * 60) - 1 || f === frames - 1) game.renderFrame(1 / 60);
+    if (order.indexOf(app.moment.phase) > order.indexOf(maxPhase)) maxPhase = app.moment.phase;
+    if (sample > 0 && f % Math.max(1, Math.round(sample * 60)) === 0) samples.push(momentState(game, app));
+  }
+  return { ...momentState(game, app), maxPhase, samples };
 }

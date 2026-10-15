@@ -28,7 +28,8 @@ void main() {
 /**
  * Composite: comic outlines from depth (Laplacian of inverse depth, zero on
  * planes) and view-space normals (creases), distance-faded to avoid shimmer;
- * radial speed lines; saturation, vignette, fade; linear -> sRGB.
+ * radial speed lines; a rainy mood grade (darker, cooler, more contrast and
+ * vignette) and lightning flashes; saturation, vignette, fade; linear -> sRGB.
  */
 const COMPOSITE_FRAG = /* glsl */ `
 #include <packing>
@@ -49,6 +50,8 @@ uniform float uSaturation;
 uniform float uVignette;
 uniform float uFogNear;
 uniform float uFogFar;
+uniform float uMood;
+uniform float uFlash;
 varying vec2 vUv;
 
 float invZ(vec2 uv) {
@@ -115,10 +118,14 @@ void main() {
     col = mix(col, vec3(1.0), streak * thin * uSpeed * 0.42);
   }
 
+  // Lightning lights the whole frame for a moment, a little blue.
+  col += uFlash * (vec3(0.42, 0.46, 0.58) + col * 0.6);
   float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  col = mix(vec3(l), col, uSaturation);
+  // Rain grade: darker and cooler, wet contrast around mid grey, less saturated.
+  col = mix(col, max((col * vec3(0.86, 0.94, 1.08) - 0.04) * 1.12 + 0.04, 0.0) * 0.94, uMood);
+  col = mix(vec3(l), col, uSaturation * (1.0 - 0.22 * uMood));
   vec2 vq = vUv - 0.5;
-  col *= 1.0 - uVignette * dot(vq, vq) * 1.6;
+  col *= 1.0 - (uVignette + 0.4 * uMood) * dot(vq, vq) * 1.6;
   col *= 1.0 - uFade;
   gl_FragColor = vec4(toSRGB(col), 1.0);
 }`;
@@ -179,6 +186,10 @@ export class PostFX {
   private readonly pendingQueries: WebGLQuery[] = [];
   speedLines = 0;
   fade = 0;
+  /** 0..1 rainy mood grade (rooftop moment). */
+  mood = 0;
+  /** 0..1 lightning flash. */
+  flash = 0;
   readonly outlineColor = new Color(0x141820);
 
   constructor(private readonly renderer: WebGLRenderer) {
@@ -215,6 +226,8 @@ export class PostFX {
         uVignette: { value: 0.35 },
         uFogNear: { value: 300 },
         uFogFar: { value: 2000 },
+        uMood: { value: 0 },
+        uFlash: { value: 0 },
       },
       depthTest: false,
       depthWrite: false,
@@ -343,6 +356,8 @@ export class PostFX {
     this.composite.uniforms.uTime!.value = time;
     this.composite.uniforms.uSpeed!.value = this.speedLines;
     this.composite.uniforms.uFade!.value = this.fade;
+    this.composite.uniforms.uMood!.value = this.mood;
+    this.composite.uniforms.uFlash!.value = this.flash;
     // Time the passes on the GPU (a few frames in flight at most).
     const gl = this.gl;
     let query: WebGLQuery | null = null;

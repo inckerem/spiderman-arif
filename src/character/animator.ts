@@ -122,6 +122,9 @@ export class CharacterAnimator {
   /** Strength of the landing crouch set by the last landing, and its weight this frame. */
   private crouch = 0;
   private crouchW = 0;
+  /** Perched crouch while standing still on a roof (rooftop moment, menu hero): target 0..1, eased in and out. */
+  perch = 0;
+  private perchW = 0;
   private crawl = 0;
   private wallRunT = 0;
   private initialized = false;
@@ -151,6 +154,16 @@ export class CharacterAnimator {
     private readonly rig: CharacterRig,
     private readonly player: Player,
   ) {}
+
+  /** Forget foot plants, blends and tricks (the hero was moved or another animator posed it). */
+  reset(): void {
+    this.initialized = false;
+    this.feetReady = false;
+    this.sinceRelease = 99;
+    this.crouch = 0;
+    this.crouchW = 0;
+    this.perchW = 0;
+  }
 
   /** Feed simulation events (landing, release) once per tick. */
   onEvent(e: PlayerEvent): void {
@@ -227,6 +240,9 @@ export class CharacterAnimator {
       (state === S_IDLE || state === S_RUN) && this.crouch > 0
         ? this.crouch * (ct < 0.08 ? smoothstep(0, 0.08, ct) : 1 - smoothstep(0.32, 0.8, ct)) * (1 - smoothstep(1.5, 6, hs))
         : 0;
+    // A perch is the same crouch held: one hand down, head up, eased in over a second or so.
+    this.perchW += ((state === S_IDLE ? this.perch : 0) - this.perchW) * dampFactor(this.perch > 0 ? 2.2 : 5, dt);
+    this.crouchW = Math.max(this.crouchW, this.perchW * 0.8);
     this.crouchPeak = Math.max(this.crouchPeak, this.crouchW);
     let targetYaw = this.yaw;
     if (state === S_WALL) targetYaw = Math.atan2(-p.wall.nx, -p.wall.nz);

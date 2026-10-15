@@ -35,6 +35,8 @@ export interface AudioListenerState {
   diving: boolean;
   /** Menus open: ambience/wind ducked, music keeps playing. */
   paused: boolean;
+  /** 0..1, rain around the player (the rooftop moment). */
+  rain: number;
 }
 
 export interface AudioDebugInfo {
@@ -45,6 +47,8 @@ export interface AudioDebugInfo {
   musicError: string | null;
   activeVoices: number;
   loopsScheduled: number;
+  /** Target gain of the music bus (0 while no music is wanted, muted or at a zero slider). */
+  musicLevel: number;
 }
 
 /** Concurrent one-shot voices before the least important ones are stolen. */
@@ -109,10 +113,13 @@ export class AudioEngine {
   private masterVol = 1;
   private musicVol = 1;
   private sfxVol = 1;
+  /** Where music is wanted (0..1): the menus and the rooftop moment; silent in play otherwise. */
+  private presence = 1;
+  private presenceFade = 0.1;
   private unlockAt = Number.NEGATIVE_INFINITY;
   private hoverAt = Number.NEGATIVE_INFINITY;
   private warned = false;
-  private readonly smooth: AmbienceInput = { speed: 0, alt: 0, park: 0, night: 0, water: 0, swing: 0, dive: 0 };
+  private readonly smooth: AmbienceInput = { speed: 0, alt: 0, park: 0, night: 0, water: 0, swing: 0, dive: 0, rain: 0 };
 
   constructor(private readonly musicUrl: string) {}
 
@@ -200,6 +207,35 @@ export class AudioEngine {
     }
   }
 
+  /** Music wanted at this share of the music volume (0..1), faded in about `fadeSeconds`. */
+  setMusicPresence(level: number, fadeSeconds: number): void {
+    try {
+      const v = clamp01(num(level, this.presence));
+      if (v === this.presence) return;
+      this.presence = v;
+      this.presenceFade = Math.max(0.03, num(fadeSeconds, 1) / 3);
+      this.applyMusic();
+      this.presenceFade = 0.1;
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
+  get musicPresence(): number {
+    return this.presence;
+  }
+
+  /** Distant thunder (rooftop moment); closeness 0..1. */
+  thunder(closeness: number): void {
+    try {
+      const g = this.graph;
+      if (!g || !g.ambience || g.ctx.state !== 'running') return;
+      g.ambience.thunder(clamp01(num(closeness, 0.5)));
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
   /** Toggles the music mute (smooth fade); returns the new muted state. */
   toggleMusic(): boolean {
     this.musicMuted = !this.muted;
@@ -235,6 +271,7 @@ export class AudioEngine {
       sm.water = follow(sm.water, clamp01(num(s.waterFactor, 0)), d, 0.6);
       sm.swing = follow(sm.swing, s.swinging ? 1 : 0, d, 0.12);
       sm.dive = follow(sm.dive, s.diving ? 1 : 0, d, 0.15);
+      sm.rain = follow(sm.rain, clamp01(num(s.rain, 0)), d, 0.5);
       this.housekeep();
       // Automation is only scheduled on a running clock (a suspended clock would pile events up).
       if (g.ctx.state !== 'running' || !g.ambience) return;
@@ -340,6 +377,7 @@ export class AudioEngine {
         musicError: g ? g.loop.error : this.unsupported ? 'Web Audio is not available' : null,
         activeVoices: g ? g.kit.voices.active : 0,
         loopsScheduled: g ? g.loop.scheduled : 0,
+        musicLevel: this.musicGain(),
       };
     } catch {
       return {
@@ -350,6 +388,7 @@ export class AudioEngine {
         musicError: null,
         activeVoices: 0,
         loopsScheduled: 0,
+        musicLevel: 0,
       };
     }
   }
@@ -501,7 +540,7 @@ export class AudioEngine {
   }
 
   private musicGain(): number {
-    return this.muted ? 0 : perceptual(this.musicVol) * MUSIC_LEVEL;
+    return this.muted ? 0 : perceptual(this.musicVol) * MUSIC_LEVEL * this.presence;
   }
 
   private sfxGain(): number {
@@ -519,7 +558,7 @@ export class AudioEngine {
 
   private applyMusic(): void {
     const g = this.graph;
-    if (g) this.ramp(g.music.gain, this.musicGain(), 0.1);
+    if (g) this.ramp(g.music.gain, this.musicGain(), this.presenceFade);
   }
 
   private applyDucks(): void {

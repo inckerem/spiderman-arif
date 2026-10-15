@@ -211,6 +211,33 @@ export const tuning = {
     startHour: 16.6,
     fastForwardRate: 40,
   },
+  /** Rooftop moment: stand still on a roof and the night comes, with rain and music. */
+  moment: {
+    /** Seconds standing still on a roof before it starts. */
+    idleSeconds: 5,
+    /** Feet at least this high above the street below. */
+    minRoofHeight: 8,
+    /** Night hour it moves to (from the morning it goes back to `dawnNightHour` instead). */
+    nightHour: 22.6,
+    dawnNightHour: 3.4,
+    /** Time-lapse to night, then the rain builds up. */
+    toNightSeconds: 4,
+    rainInSeconds: 2.5,
+    /** Fades on the way out (music, hour back, rain). */
+    musicInSeconds: 3,
+    musicOutSeconds: 2.5,
+    hourBackSeconds: 3,
+    rainOutSeconds: 1.6,
+    /** Orbit camera: blend in and out, radius, height above the chest, speed (rad/s). */
+    orbitInSeconds: 2.5,
+    orbitOutSeconds: 1.2,
+    orbitRadius: 6,
+    orbitHeight: 1.3,
+    orbitSpeed: 0.13,
+    /** Lightning: seconds between flashes. */
+    boltMin: 8,
+    boltMax: 18,
+  },
 };
 
 export type Tuning = typeof tuning;
@@ -359,6 +386,23 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'time.dayLengthMinutes': [1, 120, 0.5],
   'time.startHour': [0, 24, 0.1],
   'time.fastForwardRate': [2, 200, 1],
+  'moment.idleSeconds': [1, 30, 0.5],
+  'moment.minRoofHeight': [2, 40, 0.5],
+  'moment.nightHour': [0, 24, 0.1],
+  'moment.dawnNightHour': [0, 24, 0.1],
+  'moment.toNightSeconds': [0.5, 15, 0.1],
+  'moment.rainInSeconds': [0.2, 10, 0.1],
+  'moment.musicInSeconds': [0.2, 10, 0.1],
+  'moment.musicOutSeconds': [0.2, 10, 0.1],
+  'moment.hourBackSeconds': [0.5, 10, 0.1],
+  'moment.rainOutSeconds': [0.2, 10, 0.1],
+  'moment.orbitInSeconds': [0.2, 6, 0.1],
+  'moment.orbitOutSeconds': [0.2, 6, 0.1],
+  'moment.orbitRadius': [2, 15, 0.1],
+  'moment.orbitHeight': [-1, 5, 0.1],
+  'moment.orbitSpeed': [0, 1, 0.01],
+  'moment.boltMin': [2, 60, 0.5],
+  'moment.boltMax': [2, 90, 0.5],
 };
 
 /** Deep copy of the shipped values so the debug panel can reset. */

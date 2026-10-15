@@ -3,7 +3,8 @@ import { expectClean, openGame, saveResult } from './helpers';
 
 // (e) Soak: 30 simulated minutes of mixed play (traversal bots, random-input
 // fuzz, ring runs, traffic and crowd, time-of-day and quality changes, menu,
-// pause and photo-mode churn) with frames rendered throughout. Passes when
+// pause and photo-mode churn, the menu's attract mode and a rooftop-moment
+// cycle with rain every minute) with frames rendered throughout. Passes when
 // the console stays clean and the JS heap and GPU resource counts show no
 // growth trend.
 test('e. soak: 30 simulated minutes, clean console, no heap growth', async ({ page }) => {
