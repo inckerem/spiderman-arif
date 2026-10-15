@@ -363,7 +363,7 @@ export const tuning = {
     koLinger: 4,
     gravity: 22,
     accel: 30,
-    thug: { hp: 60, speed: 4.5, damage: 8, telegraph: 0.45, cooldown: 1.2, range: 1.6, bottleDamage: 6, bottleMinAbove: 3, bottleRange: 15 },
+    thug: { hp: 60, speed: 4.5, damage: 8, telegraph: 0.45, cooldown: 1.2, range: 1.6, knockback: 2, bottleDamage: 6, bottleMinAbove: 3, bottleRange: 15 },
     bat: { hp: 70, speed: 4.2, damage: 14, telegraph: 0.6, cooldown: 1.6, range: 2.1, knockback: 6 },
     gunman: { hp: 50, speed: 3.5, damage: 6, telegraph: 0.7, cooldown: 2, range: 60, burst: 3, burstGap: 0.12, keepMin: 12, keepMax: 25 },
     brute: { hp: 180, speed: 3.2, damage: 22, telegraph: 0.9, cooldown: 2.2, range: 2.4, chargeDamage: 18, chargeSpeed: 12, backArcDeg: 110, aboveHeight: 1.2, pinStun: 1.5 },
