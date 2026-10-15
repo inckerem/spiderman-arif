@@ -13,6 +13,23 @@ import { TouchControls, detectTouchMode } from './input/touch';
 export type AppState = 'loading' | 'menu' | 'playing' | 'paused' | 'photo';
 
 const WATER_SAMPLES = 10;
+/** The rotate prompt needs a viewport this much taller than wide (a near-square window, such as a foldable's, plays on). */
+const UPRIGHT_ASPECT = 1.2;
+
+/**
+ * The device is held upright with a clearly tall view. A device in landscape
+ * never is, whatever the shape of its window (Split View, multi-window).
+ */
+function deviceUpright(): boolean {
+  if (window.innerHeight <= window.innerWidth * UPRIGHT_ASPECT) return false;
+  try {
+    const type = screen.orientation?.type;
+    if (type) return type.startsWith('portrait');
+  } catch {
+    // No Screen Orientation API (older iOS): the viewport shape decides.
+  }
+  return true;
+}
 
 /**
  * Application shell: owns the UI, the audio engine and the game, and runs
@@ -71,15 +88,26 @@ export class App {
   touch: TouchControls | null = null;
   /** Touch mode held in portrait: rotate prompt shown, play paused. */
   private portrait = false;
+  /** The player chose to play upright anyway (until the device turns to landscape). */
+  private portraitDismissed = false;
 
   constructor(private readonly canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
     this.touchMode = detectTouchMode();
     this.ui = new UI(uiRoot, { touch: this.touchMode });
     if (this.touchMode) {
+      this.ui.onDismissRotate = () => {
+        this.portraitDismissed = true;
+        this.checkOrientation();
+      };
       // From the loading screen on: portrait shows the rotate prompt.
       const check = (): void => this.checkOrientation();
       window.addEventListener('resize', check);
       window.addEventListener('orientationchange', check);
+      try {
+        screen.orientation?.addEventListener('change', check);
+      } catch {
+        // No Screen Orientation API: resize and orientationchange cover it.
+      }
       this.checkOrientation();
     }
     this.audio = new AudioEngine(`${import.meta.env.BASE_URL}audio/theme.mp3`);
@@ -160,9 +188,19 @@ export class App {
     document.addEventListener('gesturestart', (e) => e.preventDefault());
   }
 
-  /** Touch mode is landscape only: portrait shows the rotate prompt and pauses play. */
+  /**
+   * Touch mode is landscape only: a device held upright shows the rotate
+   * prompt and pauses play. The device orientation decides, not the window:
+   * a landscape tablet in Split View or Android multi-window can give the
+   * page a tall, narrow window and must never be locked out. Without the
+   * Screen Orientation API (older iOS) a clearly tall viewport counts as
+   * upright. The prompt can be dismissed ("Yine de oyna"); that holds until
+   * the device turns to landscape again.
+   */
   private checkOrientation(): void {
-    const portrait = window.innerHeight > window.innerWidth;
+    const upright = deviceUpright();
+    if (!upright) this.portraitDismissed = false;
+    const portrait = upright && !this.portraitDismissed;
     if (portrait === this.portrait) return;
     this.portrait = portrait;
     this.ui.setPortrait(portrait);

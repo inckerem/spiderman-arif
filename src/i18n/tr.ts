@@ -96,6 +96,7 @@ export const tr = {
     pause: 'Duraklat',
     rotateTitle: 'Cihazını yatay çevir',
     rotateText: 'SKYTHREAD yatay ekranda oynanır.',
+    rotateDismiss: 'Yine de oyna',
   },
   costume: {
     title: 'Kostüm',

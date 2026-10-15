@@ -38,6 +38,7 @@ export function fillTickInput(out: TickInput, inp: BotInput, prev: BotInput): vo
   out.jump = inp.jump;
   out.jumpPressed = inp.jump && !prev.jump;
   out.sprint = inp.sprint;
+  out.groundSprint = false;
   out.dive = inp.dive;
   out.swing = inp.swing;
   out.swingPressed = inp.swing && !prev.swing;

@@ -2634,6 +2634,11 @@ label.sk-st-label {
   font-weight: 700;
 }
 
+.sk-rotate-dismiss {
+  min-height: 46px;
+  margin-top: 0.4rem;
+}
+
 @keyframes sk-turn {
   0%,
   20% {
@@ -2649,50 +2654,53 @@ label.sk-st-label {
 }
 
 /* ------------------------------------------- phone landscape (short screens) */
+/* Touch mode only (root class sk-is-touch; :where keeps the specificity these
+   rules had before, so the 46 px touch floor above still wins): a short
+   desktop window keeps the desktop menus, which scroll (.sk-screen overflow auto). */
 
 @media (max-height: 520px) {
-  .sk-screen {
+  :where(.sk-is-touch) .sk-screen {
     padding: calc(var(--sk-safe-t) + 1.9rem) calc(var(--sk-safe-r) + 0.9rem) calc(var(--sk-safe-b) + 0.9rem) calc(var(--sk-safe-l) + 0.9rem);
   }
 
-  .sk-panel {
+  :where(.sk-is-touch) .sk-panel {
     max-width: 100%;
     padding: 2.3rem 1.4rem 1.1rem;
   }
 
-  .sk-panel::before {
+  :where(.sk-is-touch) .sk-panel::before {
     box-shadow: 6px 6px 0 var(--sk-ink);
   }
 
-  .sk-title {
+  :where(.sk-is-touch) .sk-title {
     top: -1.35rem;
     font-size: 1.5rem;
   }
 
   /* Main menu: smaller logo, Play on top and the other three in a row. */
-  .sk-screen-main {
+  :where(.sk-is-touch) .sk-screen-main {
     padding-top: calc(var(--sk-safe-t) + 0.6rem);
   }
 
-  .sk-logo {
+  :where(.sk-is-touch) .sk-logo {
     font-size: clamp(2.6rem, 16vh, 5.6rem);
   }
 
-  .sk-sunburst {
+  :where(.sk-is-touch) .sk-sunburst {
     top: 2.4rem;
   }
 
-  .sk-tagline {
+  :where(.sk-is-touch) .sk-tagline {
     margin: 0.6rem 0 0.9rem;
     padding: 0.3rem 1.2rem;
     font-size: 0.95rem;
   }
 
-  .sk-main {
+  :where(.sk-is-touch) .sk-main {
     padding-bottom: 1.2rem;
   }
 
-  .sk-main .sk-menu {
+  :where(.sk-is-touch) .sk-main .sk-menu {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.75rem;
@@ -2700,73 +2708,73 @@ label.sk-st-label {
     min-width: 0;
   }
 
-  .sk-main .sk-menu > :first-child,
-  .sk-panel-pause .sk-menu > :first-child {
+  :where(.sk-is-touch) .sk-main .sk-menu > :first-child,
+  :where(.sk-is-touch) .sk-panel-pause .sk-menu > :first-child {
     grid-column: 1 / -1;
   }
 
-  .sk-menu .sk-btn {
+  :where(.sk-is-touch) .sk-menu .sk-btn {
     min-height: 3.15rem;
     padding: 0.6rem 0.9rem;
     font-size: 1.2rem;
   }
 
-  .sk-menu .sk-btn.is-big {
+  :where(.sk-is-touch) .sk-menu .sk-btn.is-big {
     min-height: 3.4rem;
     font-size: 1.55rem;
   }
 
-  .sk-audio-hint {
+  :where(.sk-is-touch) .sk-audio-hint {
     margin-top: 0.8rem;
     padding: 0.3rem 0.9rem;
     font-size: 0.85rem;
   }
 
-  .sk-credits {
+  :where(.sk-is-touch) .sk-credits {
     bottom: calc(var(--sk-safe-b) + 0.3rem);
     font-size: 0.7rem;
   }
 
   /* Pause: two columns under Resume. */
-  .sk-panel-pause {
+  :where(.sk-is-touch) .sk-panel-pause {
     width: min(32rem, 100%);
     padding: 2.4rem 1.6rem 1.3rem;
   }
 
-  .sk-panel-pause .sk-menu {
+  :where(.sk-is-touch) .sk-panel-pause .sk-menu {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.7rem 1rem;
   }
 
-  .sk-st-row {
+  :where(.sk-is-touch) .sk-st-row {
     min-height: 2.9rem;
   }
 
-  .sk-st-ctrl {
+  :where(.sk-is-touch) .sk-st-ctrl {
     flex-basis: 12.5rem;
   }
 
-  .sk-ctl-table td {
+  :where(.sk-is-touch) .sk-ctl-table td {
     font-size: 0.88rem;
   }
 
-  .sk-costumes {
+  :where(.sk-is-touch) .sk-costumes {
     gap: 0.8rem;
   }
 
-  .sk-costume-art {
+  :where(.sk-is-touch) .sk-costume-art {
     max-height: 30vh;
   }
 
-  .sk-actions .sk-btn.is-small {
+  :where(.sk-is-touch) .sk-actions .sk-btn.is-small {
     min-height: 3.15rem;
   }
 }
 
 @media (max-height: 520px) and (min-width: 800px) {
-  .sk-st-cols,
-  .sk-ctl-tables {
+  :where(.sk-is-touch) .sk-st-cols,
+  :where(.sk-is-touch) .sk-ctl-tables {
     grid-template-columns: 1fr 1fr;
     gap: 0 1.6rem;
   }

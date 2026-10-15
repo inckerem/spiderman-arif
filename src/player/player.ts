@@ -119,6 +119,9 @@ interface TraverseState {
   ignoreB: number;
 }
 
+/** Wall crawl: stick deflection below this reads as no up/down input. */
+const WALL_STICK_DEADBAND = 0.2;
+
 const tmpA = new Vector3();
 const tmpB = new Vector3();
 const tmpC = new Vector3();
@@ -1411,9 +1414,12 @@ export class Player {
     const camDot = this.camRight.x * rx + this.camRight.z * rz;
     const latSign = Math.abs(camDot) < 0.2 ? 1 : Math.sign(camDot);
     const lat = inp.moveX * latSign;
+    // A slightly tilted thumb (analog stick) neither drops off nor mantles: the
+    // up/down decisions use a deadband; keys give exactly -1, 0 or +1.
+    const my = Math.abs(inp.moveY) < WALL_STICK_DEADBAND ? 0 : inp.moveY;
     wall.run = Math.max(0, wall.run - W.wallRunDecay * dt);
-    if (inp.moveY < 0) wall.run = 0;
-    const up = inp.moveY * W.crawlSpeed + (inp.moveY >= 0 ? wall.run : 0);
+    if (my < 0) wall.run = 0;
+    const up = my * W.crawlSpeed + (my >= 0 ? wall.run : 0);
     this.vel.set(rx * lat * W.crawlSpeed - nx * W.stick, up, rz * lat * W.crawlSpeed - nz * W.stick);
     this.integrate(dt);
     this.vel.set(rx * lat * W.crawlSpeed, up, rz * lat * W.crawlSpeed);
@@ -1435,7 +1441,7 @@ export class Player {
       if (above >= 0) {
         wall.id = above;
       } else {
-        if (inp.moveY > 0 || wall.run > 0) {
+        if (my > 0 || wall.run > 0) {
           if (this.tryLedgeMantle(fx, fz, top)) return;
           // Could not mantle (blocked): pop up off the wall.
           this.vel.set(nx * 2, 7, nz * 2);
@@ -1496,7 +1502,7 @@ export class Player {
       }
     }
     // Bottom: reached the ground.
-    if (c.ground && inp.moveY <= 0) {
+    if (c.ground && my <= 0) {
       this.land(0, 0, c.groundSurface);
       return;
     }

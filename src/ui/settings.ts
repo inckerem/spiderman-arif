@@ -149,7 +149,8 @@ function writeJson(key: string, value: unknown): void {
  */
 export function loadSettings(firstRun: Partial<Settings> = {}): Settings {
   const stored = readJson(SETTINGS_KEY);
-  return sanitizeSettings(stored === null ? { ...DEFAULT_SETTINGS, ...firstRun } : stored);
+  // Anything but an object (nothing stored, or a corrupt "x" or 5) counts as a first run.
+  return sanitizeSettings(isRecord(stored) ? stored : { ...DEFAULT_SETTINGS, ...firstRun });
 }
 
 /** Saves a validated copy of the settings. Never throws. */

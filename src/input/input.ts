@@ -232,8 +232,13 @@ export class Input {
     if (this.virtualHeld.delete(action)) this.virtualReleased.add(action);
   }
 
-  /** Touch stick axes (-1..1) and whether it is pushed to its rim (ground sprint). */
+  /**
+   * Touch stick axes (-1..1) and whether it is pushed to its rim (ground
+   * sprint). Leaving the dead zone counts as activity (like a key press), so a
+   * thumb resting on the stick that starts to push ends the rooftop moment.
+   */
   setStick(x: number, y: number, sprint: boolean): void {
+    if ((x !== 0 || y !== 0) && this.stickX === 0 && this.stickY === 0) this.activity++;
     this.stickX = x;
     this.stickY = y;
     this.stickSprint = sprint;
@@ -297,8 +302,11 @@ export class Input {
     if (this.held.delete(e.code)) this.releasedSinceTick.add(e.code);
   };
 
+  /** Lost focus: nothing stays held, keys or on-screen buttons and the stick (no release edges, like a pause). */
   private onBlur = (): void => {
     this.held.clear();
+    this.virtualHeld.clear();
+    this.setStick(0, 0, false);
   };
 
   private onMouseDown = (e: MouseEvent): void => {

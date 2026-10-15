@@ -256,6 +256,8 @@ function bindingCaps(labels: readonly string[], joiner: string | null, note: str
 export class UI {
   onPlay: () => void = noop;
   onResume: () => void = noop;
+  /** Touch: the rotate prompt's "play anyway" button. */
+  onDismissRotate: () => void = noop;
   onMainMenu: () => void = noop;
   /** Touch pause menu: photo mode and the music toggle (keys P and M on desktop). */
   onPhoto: () => void = noop;
@@ -383,7 +385,13 @@ export class UI {
       const rotate = el('div', 'sk-rotate');
       rotate.setAttribute('role', 'alert');
       const box = el('div', 'sk-rotate-box');
-      box.append(icon(ICON_PHONE, 'sk-icon sk-rotate-icon'), el('p', 'sk-rotate-title', tr.touch.rotateTitle), el('p', 'sk-rotate-text', tr.touch.rotateText));
+      box.append(
+        icon(ICON_PHONE, 'sk-icon sk-rotate-icon'),
+        el('p', 'sk-rotate-title', tr.touch.rotateTitle),
+        el('p', 'sk-rotate-text', tr.touch.rotateText),
+        // Never a lock-out: a window the check misjudges can still be played.
+        this.button(tr.touch.rotateDismiss, 'is-small sk-rotate-dismiss', () => this.onDismissRotate()),
+      );
       rotate.append(box);
       root.append(rotate);
       this.rotateEl = rotate;

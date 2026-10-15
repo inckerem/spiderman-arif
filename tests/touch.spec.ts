@@ -256,6 +256,14 @@ test.describe('mobile', () => {
       await fingers.up(id);
       return { ...s, ...inp };
     };
+    // Pushing a resting thumb out of the dead zone counts as input (it ends the rooftop moment).
+    await page.evaluate(() => (window as any).__game.touchSpot('avenue'));
+    const restId = await fingers.down(sx, sy);
+    const act0 = await page.evaluate(() => (window as any).__game.game.input.activity as number);
+    await fingers.drag(restId, 0, -0.5 * R, 4);
+    const act1 = await page.evaluate(() => (window as any).__game.game.input.activity as number);
+    await fingers.up(restId);
+    expect(act1).toBeGreaterThan(act0);
     const half = await stickRun(0.5);
     const full = await stickRun(0.93);
     const rim = await stickRun(1.4);
@@ -355,8 +363,16 @@ test.describe('mobile', () => {
     await fingers.up(lookId);
     await fingers.up(stickId);
     const stillHeld = await player(page);
+    // A finger holding + when the line goes: the hidden button lets go (no reeling while hidden).
+    const reelIn = await center(page, '.sk-tb-reel-in');
+    const reelId = await fingers.down(reelIn.x, reelIn.y);
+    await expect(page.locator('.sk-tb-reel-in')).toHaveClass(/is-down/);
     await fingers.up(webId);
     await page.waitForFunction(() => (window as any).__game.game.player.rope.attached === false, null, { timeout: 10_000 });
+    await expect(page.locator('.sk-tb-reel-in')).toBeHidden();
+    const reelAfter = await page.evaluate(() => document.querySelector('.sk-tb-reel-in')!.classList.contains('is-down'));
+    await fingers.up(reelId);
+    expect(reelAfter).toBe(false);
     const webEvents = await eventsSince(page, e0);
     report.web = { held, yawWhileSwinging: yawHold, attachedAfterOtherFingersLift: stillHeld.attached, events: webEvents };
     expect(held.attached).toBe(true);
@@ -394,6 +410,23 @@ test.describe('mobile', () => {
     await fingers.up(diveId);
     await page.waitForFunction(() => (window as any).__game.game.player.diving === false, null, { timeout: 10_000 });
     report.dive = true;
+    // Lost focus lets go of on-screen buttons and the stick too.
+    const blurDive = await fingers.down(dive.x, dive.y);
+    const blurStick = await fingers.down(sx, sy);
+    await fingers.drag(blurStick, 0, -0.6 * R, 3);
+    await page.waitForFunction(() => {
+      const i = (window as any).__game.game.input;
+      return i.isHeld('dive') && i.stickY > 0.4;
+    }, null, { timeout: 10_000 });
+    const blurred = await page.evaluate(() => {
+      window.dispatchEvent(new Event('blur'));
+      const i = (window as any).__game.game.input;
+      return { dive: i.isHeld('dive') as boolean, x: i.stickX as number, y: i.stickY as number };
+    });
+    await fingers.up(blurStick);
+    await fingers.up(blurDive);
+    report.blur = blurred;
+    expect(blurred).toEqual({ dive: false, x: 0, y: 0 });
 
     // --- Tırman: stick forward + hold Tırman clings to the facade and climbs; letting go drops ---
     const wall = await page.evaluate(() => (window as any).__game.touchSpot('wall'));
@@ -436,7 +469,19 @@ test.describe('mobile', () => {
     const portrait = await page.evaluate(() => ({ playing: (window as any).__game.game.playing, scrollWidth: document.documentElement.scrollWidth, vw: innerWidth }));
     expect(portrait.playing).toBe(false);
     expect(portrait.scrollWidth).toBeLessThanOrEqual(portrait.vw);
+    // Never a lock-out: the prompt can be dismissed.
+    await page.getByRole('button', { name: 'Yine de oyna' }).tap();
+    await expect(page.locator('.sk-rotate')).toBeHidden();
     await page.setViewportSize(MOBILE);
+    await expect(page.locator('.sk-rotate')).toBeHidden();
+    // A landscape device with a tall window (Split View, multi-window) gets no prompt.
+    await page.evaluate(() => Object.defineProperty(screen.orientation, 'type', { configurable: true, get: () => 'landscape-primary' }));
+    await page.setViewportSize({ width: 420, height: 800 });
+    await page.waitForTimeout(300);
+    const splitView = await page.evaluate(() => (window as any).__game.app.ui.portraitPrompt as boolean);
+    await page.evaluate(() => delete (screen.orientation as any).type);
+    await page.setViewportSize(MOBILE);
+    expect(splitView).toBe(false);
     await expect(page.locator('.sk-rotate')).toBeHidden();
     await tapButton(page, 'Devam Et');
     await page.waitForFunction(() => (window as any).__game.game.playing === true, null, { timeout: 10_000 });
@@ -451,6 +496,13 @@ test.describe('mobile', () => {
     const kept = await page.evaluate(() => ({ quality: (window as any).__game.app.ui.settings.quality, game: (window as any).__game.game.qualityIndex }));
     expect(kept).toEqual({ quality: 1, game: 1 });
     report.qualityAfterChoice = kept;
+    // Corrupt but parseable settings ("x", 5) are a first run again: Low.
+    for (const junk of ['"x"', '5']) {
+      await page.evaluate((j) => localStorage.setItem('skythread.settings.v1', j), junk);
+      await page.reload();
+      await open(page);
+      expect(await page.evaluate(() => (window as any).__game.app.ui.settings.quality), junk).toBe(0);
+    }
 
     saveResult('k-touch', report);
     expectClean(problems);

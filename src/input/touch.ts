@@ -162,11 +162,12 @@ export class TouchControls {
     this.releaseAll();
   }
 
-  /** The reel buttons show while a line is attached. */
+  /** The reel buttons show while a line is attached; hiding them lets go of a held one (no reeling while hidden). */
   setSwinging(on: boolean): void {
     if (on === this.swinging) return;
     this.swinging = on;
     this.el.classList.toggle('is-swinging', on);
+    if (!on) for (const b of this.buttons) if (b.reel !== 0 && b.pointer !== -1) this.release(b);
   }
 
   /**
