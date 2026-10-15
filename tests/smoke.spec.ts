@@ -9,10 +9,11 @@ test('@quick loads, steps ticks, clean console', async ({ page }) => {
   });
   page.on('pageerror', (e) => problems.push(`[pageerror] ${e.message}`));
   // Everything is local or procedural: no request may leave the page's origin.
+  const origin = new URL(test.info().project.use.baseURL as string).origin;
   const external: string[] = [];
   page.on('request', (r) => {
     const u = r.url();
-    if (!u.startsWith('http://127.0.0.1:5173/') && !u.startsWith('data:') && !u.startsWith('blob:')) external.push(u);
+    if (!u.startsWith(`${origin}/`) && !u.startsWith('data:') && !u.startsWith('blob:')) external.push(u);
   });
   await page.goto('/');
   await page.waitForFunction(() => (window as any).__game?.ready === true, null, { timeout: 120_000 });
