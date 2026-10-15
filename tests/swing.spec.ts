@@ -7,7 +7,7 @@ import { expectClean, openGame, saveResult } from './helpers';
 // cuts, presses at open sky do nothing, the pull line eases in and Space cuts
 // it), camera auto-follow, and line edge cases (held state cleared without a
 // release lets go, a click shorter than a tick fires, Space while a line from
-// the ground is in flight jumps and keeps it).
+// the ground is in flight jumps and keeps it, one from a wall is cut).
 test('a. rope and swing behave as designed', async ({ page }) => {
   const problems = await openGame(page);
   const r = await page.evaluate(() => {
@@ -79,5 +79,12 @@ test('a. rope and swing behave as designed', async ({ page }) => {
   expect(e.jumpedInFlight).toBe(true);
   expect(e.lineKeptAfterSpace).toBe(true);
   expect(e.attachedAfterSpace).toBe(true);
+  // From a wall (clinging at its foot, feet still supported) Space cuts the line in flight.
+  expect(e.wallClung).toBe(true);
+  expect(e.wallPlanned).toBe(true);
+  expect(e.wallFeetHeight).toBeLessThan(0.4);
+  expect(e.firedFromWall).toBe(true);
+  expect(e.wallSpaceJumped).toBe(false);
+  expect(e.wallSpaceCut).toBe(true);
   expectClean(problems);
 });

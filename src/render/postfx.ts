@@ -120,9 +120,10 @@ void main() {
 
   // Lightning lights the whole frame for a moment, a little blue.
   col += uFlash * (vec3(0.42, 0.46, 0.58) + col * 0.6);
-  float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  // Rain grade: darker and cooler, wet contrast around mid grey, less saturated.
+  // Rain grade: darker and cooler, wet contrast around mid grey, less saturated
+  // (the saturation pivot is the graded luminance, so it keeps the darkening).
   col = mix(col, max((col * vec3(0.86, 0.94, 1.08) - 0.04) * 1.12 + 0.04, 0.0) * 0.94, uMood);
+  float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
   col = mix(vec3(l), col, uSaturation * (1.0 - 0.22 * uMood));
   vec2 vq = vUv - 0.5;
   col *= 1.0 - (uVignette + 0.4 * uMood) * dot(vq, vq) * 1.6;
@@ -175,15 +176,28 @@ export class PostFX {
   costAvg = 8;
   /** Last GPU time of the passes (ms), 0 without a GPU timer. */
   gpuMs = 0;
+  /** CPU time of the last `render` call (scene pass and post passes), ms. */
+  renderMs = 0;
+  /** Device pixels per CSS pixel of the canvas (sets the dynamic floor). */
+  pixelRatio = 1;
+  private prevRenderMs = 0;
   private cooldown = 0;
   /** A raise must wait this long (ms) after the last drop; grows when raises keep failing. */
   private raiseHold = 2000;
   private sinceDrop = 0;
   private sinceRaise = 1e9;
   private readonly gl: WebGL2RenderingContext;
-  private readonly timer: TimerQueryExt | null;
-  private readonly freeQueries: WebGLQuery[] = [];
-  private readonly pendingQueries: WebGLQuery[] = [];
+  private timer: TimerQueryExt | null;
+  private freeQueries: WebGLQuery[] = [];
+  private pendingQueries: WebGLQuery[] = [];
+  /** Pending results to throw away (their window saw a disjoint event). */
+  private discardQueries = 0;
+  /** performance.now() of the last GPU sample. */
+  private gpuSampleAt = -1e9;
+  /** performance.now() since which the oldest pending query has waited (stuck-query detection). */
+  private queryProgressAt = 0;
+  private readonly onContextLost = (): void => this.resetTimer(false);
+  private readonly onContextRestored = (): void => this.resetTimer(true);
   speedLines = 0;
   fade = 0;
   /** 0..1 rainy mood grade (rooftop moment). */
@@ -195,6 +209,8 @@ export class PostFX {
   constructor(private readonly renderer: WebGLRenderer) {
     this.gl = renderer.getContext() as WebGL2RenderingContext;
     this.timer = this.gl.getExtension('EXT_disjoint_timer_query_webgl2') as TimerQueryExt | null;
+    renderer.domElement.addEventListener('webglcontextlost', this.onContextLost);
+    renderer.domElement.addEventListener('webglcontextrestored', this.onContextRestored);
     const depth = new DepthTexture(1, 1, FloatType);
     this.sceneRT = new WebGLRenderTarget(1, 1, {
       count: 2,
@@ -256,11 +272,21 @@ export class PostFX {
     this.quadCopy = new FullScreenQuad(this.copy);
   }
 
-  /** Canvas size in device pixels. */
-  setSize(width: number, height: number): void {
+  /** Canvas size in device pixels and the device pixels per CSS pixel. */
+  setSize(width: number, height: number, pixelRatio = 1): void {
     this.width = Math.max(1, width);
     this.height = Math.max(1, height);
+    this.pixelRatio = pixelRatio;
     this.applySize();
+  }
+
+  /**
+   * Lowest dynamic scale: an internal image of 0.75 x the CSS pixel size. At
+   * a pixel ratio of 1 that is 0.75; HiDPI (ratio 1.5) may go down to 0.5, so
+   * a sharp preset still falls to the cost of a 1x canvas when it has to.
+   */
+  get dynFloor(): number {
+    return Math.min(0.75, 0.75 / Math.max(0.01, this.pixelRatio));
   }
 
   get internalWidth(): number {
@@ -285,14 +311,20 @@ export class PostFX {
   }
 
   /**
-   * Adjusts the dynamic resolution scale from the render cost of the last
-   * frame: the CPU time of its work (`workMs`, simulation and rendering) and,
-   * where the browser offers a GPU timer, the GPU time of the passes. The
-   * frame interval (`frameMs`) cannot show spare time on a vsync-locked
-   * display (never under 16.7 ms at 60 Hz), so it counts only without a GPU
-   * timer and only when frames are clearly late. Hysteresis: drop above 90 %
-   * of the budget, raise below 60 % once `raiseHold` has passed since the
-   * last drop; a raise that has to be undone soon doubles that hold.
+   * Adjusts the dynamic resolution scale from the part of the frame cost that
+   * the resolution can change. That is the GPU time of the passes where the
+   * browser offers a GPU timer and a sample arrived within the last second;
+   * otherwise the CPU time of the render call (`renderMs`), plus a late-frame
+   * fallback. Simulation, traffic, crowd and animation CPU time never counts:
+   * a lower resolution cannot make it cheaper. The frame interval (`frameMs`)
+   * cannot show spare time on a vsync-locked display (never under 16.7 ms at
+   * 60 Hz), so the fallback counts it only when frames are clearly late, and
+   * then without the CPU work of the previous frame outside the render call
+   * (`workMs` is the previous frame's whole CPU time, the work that delayed
+   * this frame). Hysteresis: drop above 90 % of the budget, raise below 60 %
+   * once `raiseHold` has passed since the last drop; a raise that has to be
+   * undone soon doubles that hold (up to 30 s), and only a minute without a
+   * drop resets it.
    */
   updateDynamic(workMs: number, frameMs: number, targetMs = 16.7): void {
     if (!this.settings.dynamicResolution) {
@@ -300,11 +332,14 @@ export class PostFX {
         this.dynScale = 1;
         this.applySize();
       }
+      this.prevRenderMs = this.renderMs;
       return;
     }
     this.pollGpuTimer();
-    let cost = Math.max(workMs, this.gpuMs);
-    if (!this.timer && frameMs > targetMs * 1.25) cost = Math.max(cost, frameMs);
+    const gpuFresh = this.timer !== null && performance.now() - this.gpuSampleAt < 1000;
+    let cost = gpuFresh ? this.gpuMs : this.renderMs;
+    if (!gpuFresh && frameMs > targetMs * 1.25) cost = Math.max(cost, frameMs - Math.max(0, workMs - this.prevRenderMs));
+    this.prevRenderMs = this.renderMs;
     this.stepDynamic(cost, frameMs, targetMs);
   }
 
@@ -315,11 +350,12 @@ export class PostFX {
     this.cooldown -= dt;
     this.sinceDrop += dt;
     this.sinceRaise += dt;
-    if (this.sinceDrop > 20000) this.raiseHold = 2000;
+    // A minute without a drop: the machine copes, forget the back-off.
+    if (this.sinceDrop > 60000) this.raiseHold = 2000;
     if (this.cooldown > 0) return;
     let next = this.dynScale;
     if (this.costAvg > targetMs * 0.9) {
-      next = Math.max(0.75, this.dynScale - 0.05);
+      next = Math.max(this.dynFloor, this.dynScale - 0.05);
       if (next !== this.dynScale) {
         if (this.sinceRaise < 3000) this.raiseHold = Math.min(30000, this.raiseHold * 2);
         this.sinceDrop = 0;
@@ -337,15 +373,47 @@ export class PostFX {
     }
   }
 
-  /** Reads finished GPU timer queries (never waits for one). */
+  /**
+   * Reads finished GPU timer queries (never waits for one). A disjoint event
+   * (GPU clock change, context trouble) invalidates every query in flight, so
+   * all pending results are thrown away. Queries that never finish (a lost
+   * context) are dropped once the oldest has waited a second, so timing resumes.
+   */
   private pollGpuTimer(): void {
     const gl = this.gl;
-    while (this.timer && this.pendingQueries.length > 0) {
+    const timer = this.timer;
+    if (!timer) return;
+    if (this.pendingQueries.length > 0 && gl.getParameter(timer.GPU_DISJOINT_EXT)) this.discardQueries = this.pendingQueries.length;
+    while (this.pendingQueries.length > 0) {
       const q = this.pendingQueries[0]!;
       if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
-      if (!gl.getParameter(this.timer.GPU_DISJOINT_EXT)) this.gpuMs = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
+      if (this.discardQueries > 0) this.discardQueries--;
+      else {
+        this.gpuMs = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
+        this.gpuSampleAt = performance.now();
+      }
       this.freeQueries.push(this.pendingQueries.shift()!);
+      this.queryProgressAt = performance.now();
     }
+    if (this.pendingQueries.length >= 3 && performance.now() - this.queryProgressAt > 1000) {
+      for (const q of this.pendingQueries) gl.deleteQuery(q);
+      this.pendingQueries.length = 0;
+      this.discardQueries = 0;
+      this.queryProgressAt = performance.now();
+    }
+  }
+
+  /**
+   * Context lost or restored: the pooled queries belong to the old context and
+   * are dropped (not deleted); on restore the extension is acquired again.
+   */
+  private resetTimer(restored: boolean): void {
+    this.freeQueries = [];
+    this.pendingQueries = [];
+    this.discardQueries = 0;
+    this.gpuMs = 0;
+    this.queryProgressAt = performance.now();
+    this.timer = restored ? (this.gl.getExtension('EXT_disjoint_timer_query_webgl2') as TimerQueryExt | null) : null;
   }
 
   render(scene: Scene, camera: Camera, time: number): void {
@@ -358,7 +426,8 @@ export class PostFX {
     this.composite.uniforms.uFade!.value = this.fade;
     this.composite.uniforms.uMood!.value = this.mood;
     this.composite.uniforms.uFlash!.value = this.flash;
-    // Time the passes on the GPU (a few frames in flight at most).
+    // Time the passes on the GPU (a few frames in flight at most) and on the CPU.
+    const t0 = performance.now();
     const gl = this.gl;
     let query: WebGLQuery | null = null;
     if (this.timer && this.settings.dynamicResolution && this.pendingQueries.length < 3) {
@@ -385,8 +454,10 @@ export class PostFX {
     }
     if (query && this.timer) {
       gl.endQuery(this.timer.TIME_ELAPSED_EXT);
+      if (this.pendingQueries.length === 0) this.queryProgressAt = performance.now();
       this.pendingQueries.push(query);
     }
+    this.renderMs = performance.now() - t0;
   }
 
   setFog(near: number, far: number): void {
@@ -409,5 +480,7 @@ export class PostFX {
     this.quadFxaa.dispose();
     this.quadCopy.dispose();
     for (const q of [...this.freeQueries, ...this.pendingQueries]) this.gl.deleteQuery(q);
+    this.renderer.domElement.removeEventListener('webglcontextlost', this.onContextLost);
+    this.renderer.domElement.removeEventListener('webglcontextrestored', this.onContextRestored);
   }
 }

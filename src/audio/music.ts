@@ -8,7 +8,10 @@
  * equal-power curves: instance n+1 starts at start(n) + span - crossfade.
  * Instances are scheduled ahead on the AudioContext clock (at least two loops
  * and 45 s), so a paused or throttled main thread never causes a gap; pump()
- * only tops the queue up.
+ * only tops the queue up. `restart` fades the running chain out in a few
+ * milliseconds and starts a new one from the top of the track (the rooftop
+ * moment); each chain has its own gain node, so the fade never fights the
+ * instances' crossfade automation.
  */
 import { applyCurve, clamp, fadeCurve } from './dsp';
 
@@ -22,10 +25,16 @@ const LOOKAHEAD = 45;
 const MAX_LIVE = 8;
 /** Target RMS after normalisation (about -20 dBFS). */
 const TARGET_RMS = 0.1;
+/** Fade-out of the old chain on a restart. */
+const RESTART_FADE = 0.04;
 
 interface Instance {
   src: AudioBufferSourceNode;
   gain: GainNode;
+  /** The chain gain node it plays through. */
+  chain: GainNode;
+  /** Start time on the audio clock. */
+  at: number;
 }
 
 /** A failure whose message is already user-facing. */
@@ -123,6 +132,8 @@ export class MusicLoop {
   error: string | null = null;
   /** Loop instances scheduled so far. */
   scheduled = 0;
+  /** Restarts from the top so far. */
+  restarts = 0;
   private buffer: AudioBuffer | null = null;
   private offset = 0;
   private span = 0;
@@ -132,6 +143,7 @@ export class MusicLoop {
   private started = false;
   private requested = false;
   private readonly live: Instance[] = [];
+  private chain: GainNode | null = null;
   private readonly fadeIn = fadeCurve(64, true);
   private readonly fadeOut = fadeCurve(64, false);
 
@@ -203,6 +215,51 @@ export class MusicLoop {
     }
   }
 
+  /** Live loop instances (playing or scheduled). */
+  get liveCount(): number {
+    return this.live.length;
+  }
+
+  /**
+   * Starts the track again from the top in `delay` seconds: the running chain
+   * fades out over RESTART_FADE and stops, instances not yet started are
+   * dropped. Before the track is decoded this does nothing (the first start
+   * plays from the top anyway).
+   */
+  restart(delay = 0.1): void {
+    if (!this.buffer) return;
+    const now = this.ctx.currentTime;
+    const old = this.chain;
+    if (old) {
+      old.gain.cancelScheduledValues(now);
+      old.gain.setValueAtTime(1, now);
+      old.gain.linearRampToValueAtTime(0, now + RESTART_FADE);
+    }
+    this.chain = null;
+    const stopAt = now + RESTART_FADE + 0.01;
+    for (const inst of [...this.live]) {
+      if (inst.at >= stopAt) {
+        // Not playing yet: drop it now.
+        try {
+          inst.src.stop();
+        } catch {
+          // Never started.
+        }
+        this.ended(inst);
+      } else {
+        try {
+          inst.src.stop(stopAt);
+        } catch {
+          // Already stopped.
+        }
+      }
+    }
+    this.started = true;
+    this.restarts++;
+    this.schedule(now + Math.max(delay, RESTART_FADE), FIRST_FADE);
+    this.pump();
+  }
+
   private fail(reason: string): void {
     if (this.error) return;
     this.error = reason;
@@ -231,10 +288,15 @@ export class MusicLoop {
     const outAt = t + this.span - this.xf;
     applyCurve(g.gain, this.fadeIn, t, clamp(fade, 0.005, Math.max(0.005, this.span - this.xf - 0.01)));
     applyCurve(g.gain, this.fadeOut, outAt, this.xf);
+    let chain = this.chain;
+    if (!chain) {
+      chain = this.chain = ctx.createGain();
+      chain.connect(this.out);
+    }
     src.connect(g);
-    g.connect(this.out);
+    g.connect(chain);
     src.start(t, this.offset, this.span);
-    const inst: Instance = { src, gain: g };
+    const inst: Instance = { src, gain: g, chain, at: t };
     src.onended = () => this.ended(inst);
     this.live.push(inst);
     this.scheduled++;
@@ -252,5 +314,13 @@ export class MusicLoop {
     }
     const i = this.live.indexOf(inst);
     if (i >= 0) this.live.splice(i, 1);
+    // The last instance of an old chain: release its gain node.
+    if (inst.chain !== this.chain && !this.live.some((o) => o.chain === inst.chain)) {
+      try {
+        inst.chain.disconnect();
+      } catch {
+        // Already disconnected.
+      }
+    }
   }
 }

@@ -144,6 +144,20 @@ test('g. settings persist, audio decodes, pause/resume and photo export work', a
   });
   expect(musicRms).toBeGreaterThan(0.005);
   expect(audio.musicLevel).toBeGreaterThan(0);
+  // Restarting from the top (the rooftop moment's cue) replaces the running
+  // chain: the old instances stop, no extra sources are left behind.
+  const restart = await page.evaluate(async () => {
+    const a = (window as any).__game.app.audio;
+    const before = a.getDebugInfo();
+    a.restartMusic();
+    await new Promise((r) => setTimeout(r, 500));
+    const after = a.getDebugInfo();
+    return { before: before.liveLoops, after: after.liveLoops, restarts: after.musicRestarts, scheduled: after.loopsScheduled - before.loopsScheduled };
+  });
+  expect(restart.restarts).toBe(1);
+  expect(restart.scheduled).toBeGreaterThan(0);
+  expect(restart.after).toBeGreaterThan(0);
+  expect(restart.after).toBeLessThanOrEqual(restart.before);
 
   // --- Play: no music in game (it returns in the menus and the rooftop moment) ---
   await page.getByRole('button', { name: 'Oyna' }).click();
@@ -194,21 +208,24 @@ test('g. settings persist, audio decodes, pause/resume and photo export work', a
   await page.keyboard.press('p');
   await page.waitForFunction(() => (window as any).__game.app.state === 'playing', null, { timeout: 60_000 });
 
-  const result = { applied: want, reloadedOk: true, audio, musicRms, inGame, voices, photo: { name, bytes: bytes.length } };
+  const result = { applied: want, reloadedOk: true, audio, musicRms, restart, inGame, voices, photo: { name, bytes: bytes.length } };
   saveResult('g-ui', result);
   console.log('g. ui', JSON.stringify(result));
   expectClean(problems);
 });
 
 // (g2) Dynamic resolution follows the render cost, not the frame interval: on a
-// vsync-locked 60 Hz display a load spike lowers the scale to its 0.75 floor,
-// and it returns to full resolution once the cost drops, without hunting.
+// vsync-locked 60 Hz display a load spike lowers the scale to its floor (0.75 x
+// the CSS pixels: 0.75 at pixel ratio 1, 0.5 at 1.5), and it returns to full
+// resolution once the cost drops, without hunting. A marginal machine backs
+// off to 30 s between raises; a calm minute clears the back-off.
 test('g2. dynamic resolution recovers at 60 Hz', async ({ page }) => {
   const problems = await openGame(page);
   const r = await page.evaluate(() => (window as any).__game.dynResTest());
   saveResult('g2-dynres', r);
   console.log('g2. dynres', JSON.stringify(r));
   expect(r.start).toBe(1);
+  expect(r.floor).toBeCloseTo(0.75, 5);
   expect(r.afterSpike).toBeCloseTo(0.75, 5);
   expect(r.recovered).toBe(1);
   expect(r.recoverSeconds).toBeLessThan(6);
@@ -217,5 +234,13 @@ test('g2. dynamic resolution recovers at 60 Hz', async ({ page }) => {
   expect(r.gpuBoundScale).toBeGreaterThanOrEqual(0.75);
   expect(r.gpuBoundChanges).toBe(0);
   expect(r.end).toBe(1);
+  expect(r.hiDpiFloor).toBeCloseTo(0.5, 5);
+  expect(r.hiDpiAfterSpike).toBeCloseTo(0.5, 5);
+  expect(r.hiDpiRecovered).toBe(1);
+  // Holds 2, 4, 8, 16, 30, 30 ... s: about a dozen raises in 300 s, then 30 s apart.
+  expect(r.marginalRaises).toBeLessThanOrEqual(12);
+  expect(r.marginalMinGap).toBeGreaterThanOrEqual(29.5);
+  expect(r.marginalMinGap).toBeLessThan(1e9);
+  expect(r.recoverAgainSeconds).toBeLessThan(6);
   expectClean(problems);
 });

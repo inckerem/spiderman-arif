@@ -166,16 +166,25 @@ export function addBuildingGeometry(bld: Building, cb: ChunkBuilders, signRect: 
     }
     // Cornice band at the top of the volume. Its top is only the outset ring:
     // the roof (or the volume above) covers the footprint at the same height,
-    // and two faces there would z-fight into stripes.
+    // and two faces there would z-fight into stripes. The ring is four
+    // trapezoids (mitred at the corners) whose outer edges are the full top
+    // edges of the side faces and whose inner edges are the roof's edges, so
+    // every shared edge has the same two vertices on both sides (no
+    // T-junctions, which crack into pinholes).
     noWindows(f);
     f.setColorArr(trim);
     const o = CORNICE_OUT;
     const cy = v.maxY - CORNICE_H;
     f.box(v.minX - o, cy, v.minZ - o, v.maxX + o, v.maxY, v.maxZ + o, 1 | 2 | 8 | 16 | 32);
-    f.box(v.minX - o, cy, v.minZ - o, v.maxX + o, v.maxY, v.minZ, 4);
-    f.box(v.minX - o, cy, v.maxZ, v.maxX + o, v.maxY, v.maxZ + o, 4);
-    f.box(v.minX - o, cy, v.minZ, v.minX, v.maxY, v.maxZ, 4);
-    f.box(v.maxX, cy, v.minZ, v.maxX + o, v.maxY, v.maxZ, 4);
+    const x0 = v.minX,
+      x1 = v.maxX,
+      z0 = v.minZ,
+      z1 = v.maxZ,
+      y = v.maxY;
+    f.quad(x0, y, z0, x1, y, z0, x1 + o, y, z0 - o, x0 - o, y, z0 - o, 0, 1, 0);
+    f.quad(x0 - o, y, z1 + o, x1 + o, y, z1 + o, x1, y, z1, x0, y, z1, 0, 1, 0);
+    f.quad(x0 - o, y, z1 + o, x0, y, z1, x0, y, z0, x0 - o, y, z0 - o, 0, 1, 0);
+    f.quad(x1, y, z1, x1 + o, y, z1 + o, x1 + o, y, z0 - o, x1, y, z0, 0, 1, 0);
     // Pilasters at the corners (and along long faces when the style uses them).
     if (st.pilasters && v.maxY - v.minY > 6) {
       f.setColorArr(mulRGB(trim, 0.95));

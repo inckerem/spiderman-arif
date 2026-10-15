@@ -2,7 +2,7 @@ import { tuning } from '../config/tuning';
 import { clamp, smoothstep } from '../core/math';
 import { Rng } from '../core/rng';
 import type { Game } from '../game';
-import { MODE_GROUND } from '../player/player';
+import { MODE_GROUND, MODE_SWING, MODE_ZIP } from '../player/player';
 
 export type MomentPhase = 'idle' | 'arming' | 'in' | 'active' | 'out';
 
@@ -21,6 +21,13 @@ export type MomentPhase = 'idle' | 'arming' | 'in' | 'active' | 'out';
  * simulation, so a shared clock (multiplayer) only has to resume after it.
  * The app calls `update` once per frame; while paused or in photo mode
  * (`live` false) everything holds still.
+ *
+ * It arms only after the player has played a while since the last spawn,
+ * respawn or new game (`minPlaySeconds`) and has moved (walked
+ * `minTravel` metres or used a line): the game starts on a roof, and a new
+ * player reading the controls should not get it right away. An explicit
+ * hour change during the moment or its way out (hour keys, the photo time
+ * slider, fast-forward) wins: the saved hour is not restored.
  */
 export class RooftopMoment {
   phase: MomentPhase = 'idle';
@@ -35,6 +42,14 @@ export class RooftopMoment {
   readonly stats = { starts: 0, ends: 0, bolts: 0 };
   /** Thunder after a lightning flash (closeness 0..1). */
   onThunder: ((closeness: number) => void) | null = null;
+  /** The moment begins (the app restarts the music from the top). */
+  onStart: (() => void) | null = null;
+  /** Live play since the last spawn, respawn or new game (s), distance walked or flown (m), a line used. */
+  sinceSpawn = 0;
+  travelled = 0;
+  usedLine = false;
+  /** The player set the hour during the moment: it is not restored. */
+  hourTaken = false;
   private t = 0;
   /** Signed hours from the saved hour to night, and the share of it reached. */
   private span = 0;
@@ -67,12 +82,21 @@ export class RooftopMoment {
       // Paused, photo mode, waiting for the pointer lock: hold everything; arming starts over.
       if (this.phase === 'arming') this.phase = 'idle';
       if (this.phase === 'idle') this.idleT = 0;
+      // A flash in progress never freezes into the pause background or a photo.
+      this.flashT = -1;
+      this.game.weather.flash = 0;
       return;
     }
+    const pl = this.game.player;
+    this.sinceSpawn += dt;
+    this.travelled += pl.speed * dt;
+    if (pl.mode === MODE_SWING || pl.mode === MODE_ZIP) this.usedLine = true;
+    // Fast-forward during the moment or its way out takes the hour over.
+    if (this.running && this.game.timeFast) this.takeHour();
     switch (this.phase) {
       case 'idle':
       case 'arming':
-        if (touched || !this.stillOnRoof()) {
+        if (touched || !this.ready || !this.stillOnRoof()) {
           this.phase = 'idle';
           this.idleT = 0;
           break;
@@ -99,15 +123,41 @@ export class RooftopMoment {
   /** Ends at once, restoring everything (leaving to the main menu, a new game). */
   cancel(): void {
     if (this.running) {
-      this.game.dayNight.setHour(this.savedHour);
+      if (!this.hourTaken) this.game.dayNight.setHour(this.savedHour);
       this.finish();
     }
     this.phase = 'idle';
     this.idleT = 0;
   }
 
+  /** A spawn, respawn or new game: the player has to play and move again before it can arm. */
+  resetSpawn(): void {
+    this.sinceSpawn = 0;
+    this.travelled = 0;
+    this.usedLine = false;
+    if (this.phase === 'arming') this.phase = 'idle';
+    this.idleT = 0;
+  }
+
+  /** Played long enough since the last spawn and moved. */
+  get ready(): boolean {
+    const M = tuning.moment;
+    return this.sinceSpawn >= M.minPlaySeconds && (this.travelled >= M.minTravel || this.usedLine);
+  }
+
+  /**
+   * The player set the hour (hour keys, photo time slider, fast-forward)
+   * during the moment or its way out: that hour wins. The moment stops
+   * driving the hour, the clock runs again and the end restores nothing.
+   */
+  takeHour(): void {
+    if (!this.running) return;
+    this.hourTaken = true;
+    this.game.dayNight.hold = false;
+  }
+
   /** Standing still on a building roof well above the street, with no input held and no race running. */
-  private stillOnRoof(): boolean {
+  stillOnRoof(): boolean {
     const g = this.game;
     const pl = g.player;
     const ti = g.tickInput;
@@ -130,6 +180,7 @@ export class RooftopMoment {
     this.t = 0;
     this.hourK = 0;
     this.savedHour = dn.hour;
+    this.hourTaken = false;
     dn.hold = true;
     const h = dn.hour;
     // Already night: stay. Morning: back through dawn to the small hours. Otherwise forward through dusk.
@@ -142,6 +193,7 @@ export class RooftopMoment {
     this.flashT = -1;
     this.thunderT = -1;
     this.stats.starts++;
+    this.onStart?.();
   }
 
   private drive(dt: number): void {
@@ -149,7 +201,7 @@ export class RooftopMoment {
     const g = this.game;
     const t = this.t;
     this.hourK = this.span === 0 ? 1 : smoothstep(0, 1, clamp(t / M.toNightSeconds, 0, 1));
-    g.dayNight.setHour(this.savedHour + this.span * this.hourK);
+    if (!this.hourTaken) g.dayNight.setHour(this.savedHour + this.span * this.hourK);
     const rainStart = M.toNightSeconds * 0.85;
     g.weather.rain = clamp((t - rainStart) / M.rainInSeconds, 0, 1);
     g.weather.mood = smoothstep(0, 1, clamp((t - M.toNightSeconds * 0.5) / (M.rainInSeconds + M.toNightSeconds * 0.5), 0, 1));
@@ -189,14 +241,14 @@ export class RooftopMoment {
     const g = this.game;
     const t = this.t;
     const back = smoothstep(0, 1, clamp(t / M.hourBackSeconds, 0, 1));
-    g.dayNight.setHour(this.savedHour + this.outFrom * (1 - back));
+    if (!this.hourTaken) g.dayNight.setHour(this.savedHour + this.outFrom * (1 - back));
     g.weather.rain = this.rainFrom * (1 - clamp(t / M.rainOutSeconds, 0, 1));
     g.weather.mood = this.moodFrom * (1 - back);
     g.cineOrbit = this.orbitFrom * (1 - smoothstep(0, 1, clamp(t / M.orbitOutSeconds, 0, 1)));
     this.thunderT = -1;
     this.lightning(dt);
     if (t >= Math.max(M.hourBackSeconds, M.rainOutSeconds, M.orbitOutSeconds)) {
-      g.dayNight.setHour(this.savedHour);
+      if (!this.hourTaken) g.dayNight.setHour(this.savedHour);
       this.finish();
       this.phase = 'idle';
       this.idleT = 0;

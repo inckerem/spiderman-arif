@@ -2,8 +2,9 @@ import { test, expect, type Page } from '@playwright/test';
 import { expectClean, openGame, saveResult } from './helpers';
 
 // (j) M9: the menu's attract mode (autopilot hero, cinematic camera) and the
-// rooftop moment (5 s still on a roof: music, night, rain, letterbox, orbit
-// camera; any input restores everything).
+// rooftop moment (5 s still on a roof after 20 s of play and some movement
+// since the spawn: music, night, rain, letterbox, orbit camera; any input
+// restores everything, an hour key keeps its hour).
 
 test('j1. attract mode: the autopilot swings around the city for minutes', async ({ page }) => {
   test.setTimeout(20 * 60 * 1000);
@@ -66,6 +67,32 @@ test('j2. rooftop moment: starts only still on a roof, any input restores', asyn
   });
   const result: Record<string, unknown> = {};
 
+  // A new game (Oyna): the hero stands on the spawn roof. Standing still there
+  // reading the controls never starts it: nothing played or moved yet.
+  await page.evaluate(() => {
+    const g = (window as any).__game;
+    const a = g.app.audio;
+    const input = g.game.input;
+    const unlock = a.unlock;
+    const lock = input.requestLock;
+    // No user gesture in this test: skip the audio unlock and the pointer-lock request.
+    a.unlock = () => {};
+    input.requestLock = () => {};
+    g.app.play();
+    a.unlock = unlock;
+    input.requestLock = lock;
+    g.app.ui.showClickToResume(false);
+    g.app.state = 'playing';
+    g.game.playing = true;
+  });
+  const spawn = await frames(page, 25);
+  result.spawn = { onRoof: spawn.onRoof, sinceSpawn: spawn.sinceSpawn, travelled: spawn.travelled, starts: spawn.starts };
+  expect(spawn.onRoof).toBe(true);
+  expect(spawn.sinceSpawn).toBeGreaterThan(24);
+  expect(spawn.ready).toBe(false);
+  expect(spawn.maxPhase).toBe('idle');
+  expect(spawn.starts).toBe(0);
+
   // Street level (an intersection downtown): standing still for 7 s never starts it.
   await page.evaluate(() => {
     const g = (window as any).__game;
@@ -91,6 +118,8 @@ test('j2. rooftop moment: starts only still on a roof, any input restores', asyn
   await page.evaluate(() => (window as any).__game.setInput({ moveY: 0 }));
   const moving = await state(page);
   expect(moving.starts).toBe(0);
+  expect(moving.travelled).toBeGreaterThan(5);
+  expect(moving.ready).toBe(true);
 
   // A ring race in progress prevents it.
   await page.evaluate(() => {
@@ -134,6 +163,8 @@ test('j2. rooftop moment: starts only still on a roof, any input restores', asyn
   expect(rising.musicPresence).toBe(1);
   expect(rising.cinematic).toBe(true);
   expect(rising.rootCine).toBe(true);
+  // The orbit keeps its distance from the hero (never squeezed against him).
+  expect(rising.camDist).toBeGreaterThan(3);
   await expect(page.locator('.sk-lb-top')).toHaveCSS('transform', 'none');
   await expect(page.locator('.sk-lb-bottom')).toHaveCSS('transform', 'none');
   await expect(page.locator('.sk-hud')).toHaveCSS('opacity', '0');
@@ -153,13 +184,19 @@ test('j2. rooftop moment: starts only still on a roof, any input restores', asyn
   const jitter = await frames(page, 1);
   expect(jitter.phase).toBe('active');
 
-  // Pausing holds it: the hour and the rain stay, nothing advances.
+  // Pausing holds it: the hour and the rain stay, nothing advances; a
+  // lightning flash in progress goes out instead of freezing bright.
   const beforePause = await state(page);
-  await page.evaluate(() => (window as any).__game.app.pause());
+  await page.evaluate(() => {
+    const g = (window as any).__game;
+    g.game.weather.flash = 0.8;
+    g.app.pause();
+  });
   const paused = await frames(page, 2);
   expect(paused.phase).toBe('active');
   expect(paused.hour).toBe(beforePause.hour);
   expect(paused.rain).toBe(1);
+  expect(paused.flash).toBe(0);
   expect(paused.musicPresence).toBe(1);
   await page.evaluate(() => {
     const g = (window as any).__game;
@@ -195,8 +232,10 @@ test('j2. rooftop moment: starts only still on a roof, any input restores', asyn
   await expect.poll(() => page.evaluate(() => document.querySelector('.sk-lb-bottom')!.getBoundingClientRect().top - window.innerHeight)).toBeGreaterThanOrEqual(-0.5);
   await expect(page.locator('.sk-hud')).toHaveCSS('opacity', '1');
 
-  // Again: a deliberate mouse movement ends it, and so does a mouse button.
-  for (const how of ['look', 'click'] as const) {
+  // Again: a deliberate mouse movement ends it, and so does a mouse button
+  // (which fires no line: the orbit is not the view the lines aim with). An
+  // hour key ends it too, and its hour wins over the restore.
+  for (const how of ['look', 'click', 'hour'] as const) {
     await page.evaluate(() => (window as any).__game.momentRoof());
     const again = await frames(page, 6.5);
     expect(again.phase).toBe('in');
@@ -204,17 +243,23 @@ test('j2. rooftop moment: starts only still on a roof, any input restores', asyn
       await page.evaluate(() => {
         for (let i = 0; i < 12; i++) window.dispatchEvent(new MouseEvent('mousemove', { movementX: 20, movementY: 4 }));
       });
-    } else await page.mouse.click(640, 360);
+    } else if (how === 'click') await page.mouse.click(640, 360);
+    else await page.keyboard.press('Digit2');
     const out = await frames(page, 4);
     expect(out.phase === 'idle' || out.phase === 'arming').toBe(true);
-    expect(out.hour).toBeCloseTo(h0, 6);
+    if (how === 'hour') {
+      expect(out.hourTaken).toBe(true);
+      expect(Math.abs(out.hour - 12)).toBeLessThan(0.3);
+      expect(out.hold).toBe(false);
+    } else expect(out.hour).toBeCloseTo(h0, 6);
+    if (how === 'click') expect(out.mode).toBe('ground');
     expect(out.rain).toBe(0);
     expect(out.musicPresence).toBe(0);
     result[`end_${how}`] = { phase: out.phase, hour: out.hour };
   }
   const final = await state(page);
-  expect(final.starts).toBe(3);
-  expect(final.ends).toBe(3);
+  expect(final.starts).toBe(4);
+  expect(final.ends).toBe(4);
   saveResult('j2-moment', result);
   console.log('j2. moment', JSON.stringify(result));
   expectClean(problems);

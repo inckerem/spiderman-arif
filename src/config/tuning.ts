@@ -215,6 +215,9 @@ export const tuning = {
   moment: {
     /** Seconds standing still on a roof before it starts. */
     idleSeconds: 5,
+    /** It arms only after this much play since the last spawn, respawn or new game, and after walking this far (m) or using a line. */
+    minPlaySeconds: 20,
+    minTravel: 5,
     /** Feet at least this high above the street below. */
     minRoofHeight: 8,
     /** Night hour it moves to (from the morning it goes back to `dawnNightHour` instead). */
@@ -223,8 +226,8 @@ export const tuning = {
     /** Time-lapse to night, then the rain builds up. */
     toNightSeconds: 4,
     rainInSeconds: 2.5,
-    /** Fades on the way out (music, hour back, rain). */
-    musicInSeconds: 3,
+    /** Music: it restarts from the top of the track and comes in quickly (keeps the intro); fades on the way out (music, hour back, rain). */
+    musicInSeconds: 0.3,
     musicOutSeconds: 2.5,
     hourBackSeconds: 3,
     rainOutSeconds: 1.6,
@@ -387,6 +390,8 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'time.startHour': [0, 24, 0.1],
   'time.fastForwardRate': [2, 200, 1],
   'moment.idleSeconds': [1, 30, 0.5],
+  'moment.minPlaySeconds': [0, 120, 1],
+  'moment.minTravel': [0, 50, 0.5],
   'moment.minRoofHeight': [2, 40, 0.5],
   'moment.nightHour': [0, 24, 0.1],
   'moment.dawnNightHour': [0, 24, 0.1],

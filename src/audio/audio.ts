@@ -33,7 +33,7 @@ export interface AudioListenerState {
   /** On a web line. */
   swinging: boolean;
   diving: boolean;
-  /** Menus open: ambience/wind ducked, music keeps playing. */
+  /** Pause menu open: ambience/wind ducked (music follows its presence, see setMusicPresence). */
   paused: boolean;
   /** 0..1, rain around the player (the rooftop moment). */
   rain: number;
@@ -47,6 +47,9 @@ export interface AudioDebugInfo {
   musicError: string | null;
   activeVoices: number;
   loopsScheduled: number;
+  /** Loop instances playing or scheduled now, and restarts from the top so far. */
+  liveLoops: number;
+  musicRestarts: number;
   /** Target gain of the music bus (0 while no music is wanted, muted or at a zero slider). */
   musicLevel: number;
 }
@@ -115,7 +118,9 @@ export class AudioEngine {
   private sfxVol = 1;
   /** Where music is wanted (0..1): the menus and the rooftop moment; silent in play otherwise. */
   private presence = 1;
+  /** Time constant of the presence fade in progress, and when that fade ends (nowMs). */
   private presenceFade = 0.1;
+  private presenceUntil = 0;
   private unlockAt = Number.NEGATIVE_INFINITY;
   private hoverAt = Number.NEGATIVE_INFINITY;
   private warned = false;
@@ -213,9 +218,10 @@ export class AudioEngine {
       const v = clamp01(num(level, this.presence));
       if (v === this.presence) return;
       this.presence = v;
-      this.presenceFade = Math.max(0.03, num(fadeSeconds, 1) / 3);
+      const fade = num(fadeSeconds, 1);
+      this.presenceFade = Math.max(0.03, fade / 3);
+      this.presenceUntil = nowMs() + fade * 1000;
       this.applyMusic();
-      this.presenceFade = 0.1;
     } catch (e) {
       this.fail(e);
     }
@@ -223,6 +229,17 @@ export class AudioEngine {
 
   get musicPresence(): number {
     return this.presence;
+  }
+
+  /** Starts the music again from the top of the track (the rooftop moment); the old chain fades out in 40 ms. */
+  restartMusic(): void {
+    try {
+      const g = this.graph;
+      if (!g || g.ctx.state !== 'running') return;
+      g.loop.restart(0.1);
+    } catch (e) {
+      this.fail(e);
+    }
   }
 
   /** Distant thunder (rooftop moment); closeness 0..1. */
@@ -377,6 +394,8 @@ export class AudioEngine {
         musicError: g ? g.loop.error : this.unsupported ? 'Web Audio is not available' : null,
         activeVoices: g ? g.kit.voices.active : 0,
         loopsScheduled: g ? g.loop.scheduled : 0,
+        liveLoops: g ? g.loop.liveCount : 0,
+        musicRestarts: g ? g.loop.restarts : 0,
         musicLevel: this.musicGain(),
       };
     } catch {
@@ -388,6 +407,8 @@ export class AudioEngine {
         musicError: null,
         activeVoices: 0,
         loopsScheduled: 0,
+        liveLoops: 0,
+        musicRestarts: 0,
         musicLevel: 0,
       };
     }
@@ -558,7 +579,8 @@ export class AudioEngine {
 
   private applyMusic(): void {
     const g = this.graph;
-    if (g) this.ramp(g.music.gain, this.musicGain(), this.presenceFade);
+    // A volume or mute change during a presence fade keeps that fade's pace.
+    if (g) this.ramp(g.music.gain, this.musicGain(), nowMs() < this.presenceUntil ? this.presenceFade : 0.1);
   }
 
   private applyDucks(): void {

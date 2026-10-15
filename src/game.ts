@@ -43,6 +43,9 @@ export interface GameOptions {
   onProgress?: (fraction: number, label: string) => void;
 }
 
+/** Extra orbit heights tried, lowest first, when the rooftop-moment orbit is squeezed (m). */
+const ORBIT_LIFTS = [0, 1.5, 3, 4.5] as const;
+
 /** Composition root: owns the loop, simulation, camera and rendering. */
 export class Game {
   readonly renderer: WebGLRenderer;
@@ -109,6 +112,11 @@ export class Game {
   private orbitOn = false;
   private orbitA = 0;
   private orbitR = 6;
+  /** Orbit direction (+1/-1), extra height over walls, and seconds spent cramped. */
+  private orbitDir = 1;
+  private orbitLift = 0;
+  private orbitCrampT = 0;
+  private readonly orbitProbe = new Vector3();
   private readonly orbitPos = new Vector3();
   private readonly orbitLook = new Vector3();
   private readonly chest = new Vector3();
@@ -116,6 +124,8 @@ export class Game {
   readonly photoCam = { pos: new Vector3(), yaw: 0, pitch: 0, fov: 70 };
   /** Called once per rendered frame (real-time loop only) after the frame is drawn. */
   onFrame: ((dt: number) => void) | null = null;
+  /** Called after an hour key (1-4) set the hour. */
+  onHourKey: (() => void) | null = null;
   /** Called for every simulation event (audio, HUD). */
   onPlayerEvent: ((e: PlayerEvent) => void) | null = null;
   /** Fixed camera pose for screenshots (tests/photo checks). */
@@ -298,6 +308,13 @@ export class Game {
     this.prevPos.copy(this.player.pos);
     this.input.sample(this.tickInput, this.rig.yaw, this.rig.pitch);
     if (this.injectInput) this.injectInput(this.tickInput);
+    if (this.cineOrbit > 0) {
+      // The rooftop moment's orbit (and its blend back) is not the view the
+      // lines aim with: the press that ends the moment fires nothing, and a
+      // button still held afterwards waits for a new press.
+      const ti = this.tickInput;
+      ti.swing = ti.swingPressed = ti.zip = ti.zipPressed = false;
+    }
     this.fillAim(this.tickInput);
     const t0 = performance.now();
     this.player.step(dt, this.tickInput);
@@ -523,6 +540,8 @@ export class Game {
     this.dayNight.apply();
     this.post.mood = wx.mood;
     this.post.flash = wx.flash;
+    // Hero rim and fill: some at night, full in the rooftop moment's rain.
+    shared.uHeroLight.value = Math.max(this.dayNight.night * 0.55, wx.mood);
     const cam0 = this.rig.camera;
     this.rain.update(dt, wx.rain, cam0.position, (2 * Math.tan((cam0.fov * Math.PI) / 360)) / Math.max(1, this.post.internalHeight), this.dayNight.night);
     this.sky.follow(this.rig.camera.position.x, this.rig.camera.position.z);
@@ -604,6 +623,7 @@ export class Game {
     if (code === 'Digit2') this.dayNight.setHour(12);
     if (code === 'Digit3') this.dayNight.setHour(18.6);
     if (code === 'Digit4') this.dayNight.setHour(23);
+    if (code === 'Digit1' || code === 'Digit2' || code === 'Digit3' || code === 'Digit4') this.onHourKey?.();
   }
 
   updateCamera(dt: number): void {
@@ -622,9 +642,24 @@ export class Game {
   }
 
   /**
+   * Clear distance of an orbit pose (angle, extra height) from the chest, as
+   * a share of its wanted distance (1 = nothing in the way).
+   */
+  private orbitClear(c: Vector3, a: number, lift: number): number {
+    const M = tuning.moment;
+    const p = this.orbitProbe.set(c.x + Math.cos(a) * this.orbitR, c.y + M.orbitHeight + lift, c.z + Math.sin(a) * this.orbitR);
+    const want = p.distanceTo(c);
+    clearShot(this.world, c, p);
+    return p.distanceTo(c) / Math.max(1e-3, want);
+  }
+
+  /**
    * Rooftop moment: blend the gameplay camera into a slow orbit around the
    * hero, starting from where the camera is. Both the orbit and the blended
    * pose are kept out of geometry (sphere cast from the hero, sphere resolve).
+   * Anti-cramp (setback terraces beside towers): the orbit turns back before
+   * a wall ahead on the arc, rises over walls when squeezed, and after 0.6 s
+   * still squeezed jumps (a cut) to the clearest side of the hero.
    */
   private orbitCamera(dt: number): void {
     const M = tuning.moment;
@@ -634,11 +669,40 @@ export class Game {
       this.orbitOn = true;
       this.orbitA = Math.atan2(cam.position.z - c.z, cam.position.x - c.x);
       this.orbitR = Math.max(2.5, Math.hypot(cam.position.x - c.x, cam.position.z - c.z));
+      this.orbitDir = 1;
+      this.orbitLift = 0;
+      this.orbitCrampT = 0;
     }
-    this.orbitA += M.orbitSpeed * dt;
+    // Turn back before a wall ahead on the arc, when the way back is clearer.
+    const ahead = this.orbitClear(c, this.orbitA + this.orbitDir * 0.35, this.orbitLift);
+    if (ahead < 0.6 && this.orbitClear(c, this.orbitA - this.orbitDir * 0.35, this.orbitLift) > ahead + 0.15) this.orbitDir = -this.orbitDir;
+    this.orbitA += this.orbitDir * M.orbitSpeed * dt;
     this.orbitR = damp(this.orbitR, M.orbitRadius, 0.6, dt);
+    // Rise over walls when squeezed (the lowest clear lift), settle back down when free.
+    let lift = 0;
+    for (const l of ORBIT_LIFTS) {
+      lift = l;
+      if (this.orbitClear(c, this.orbitA, l) >= 0.8) break;
+    }
+    this.orbitLift = damp(this.orbitLift, lift, 1.2, dt);
+    // Still squeezed: cut to the clearest side.
+    this.orbitCrampT = this.orbitClear(c, this.orbitA, this.orbitLift) < 0.45 ? this.orbitCrampT + dt : 0;
+    if (this.orbitCrampT > 0.6) {
+      this.orbitCrampT = 0;
+      let best = this.orbitA,
+        bestK = -1;
+      for (let k = 1; k < 12; k++) {
+        const a = this.orbitA + (k * Math.PI) / 6;
+        const v = this.orbitClear(c, a, this.orbitLift);
+        if (v > bestK) {
+          bestK = v;
+          best = a;
+        }
+      }
+      this.orbitA = best;
+    }
     const w = smoothstep(0, 1, this.cineOrbit);
-    const op = this.orbitPos.set(c.x + Math.cos(this.orbitA) * this.orbitR, c.y + M.orbitHeight, c.z + Math.sin(this.orbitA) * this.orbitR);
+    const op = this.orbitPos.set(c.x + Math.cos(this.orbitA) * this.orbitR, c.y + M.orbitHeight + this.orbitLift, c.z + Math.sin(this.orbitA) * this.orbitR);
     clearShot(this.world, c, op);
     // Gameplay look point, then the blend toward the orbit.
     this.orbitLook.copy(cam.position).addScaledVector(this.rig.fwd, 10).lerp(c, w);
@@ -662,7 +726,7 @@ export class Game {
     if (this.post) {
       const pr = this.renderer.getPixelRatio();
       this.post.settings.renderScale = this.renderScale;
-      this.post.setSize(Math.round(w * pr), Math.round(h * pr));
+      this.post.setSize(Math.round(w * pr), Math.round(h * pr), pr);
     }
   }
 }

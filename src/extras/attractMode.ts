@@ -32,6 +32,9 @@ export class AttractMode {
   private readonly subject: ShotSubject;
   private readonly lastFrame = new Vector3();
   private started = false;
+  /** Autopilot teleports seen, and a cut owed to the next frame. */
+  private teleportsSeen = 0;
+  private cutPending = false;
 
   constructor(
     private readonly world: CollisionWorld,
@@ -72,6 +75,8 @@ export class AttractMode {
     this.animator = new CharacterAnimator(this.hero, this.player);
     this.director = new CinematicDirector(this.world, seed);
     this.subject.vel = this.player.vel;
+    this.teleportsSeen = 0;
+    this.cutPending = false;
     this.started = false;
     this.start();
   }
@@ -101,11 +106,20 @@ export class AttractMode {
     Object.assign(ap.brain.prev, ap.brain.inp);
     for (const e of pl.events) {
       if (e.type === 'respawn' || e.type === 'recover') this.prevPos.copy(pl.pos);
+      if (e.type === 'respawn') this.cutPending = true;
       this.animator.onEvent(e);
       this.onEvent?.(e);
     }
     rig.update(dt, { pos: pl.pos, vel: pl.vel, mode: pl.mode });
     ap.after();
+    if (ap.teleports !== this.teleportsSeen) {
+      // A rescue teleport: no interpolation across it, the aim rig starts
+      // over and the director cuts on the next frame, however far it went.
+      this.teleportsSeen = ap.teleports;
+      this.prevPos.copy(pl.pos);
+      rig.snap();
+      this.cutPending = true;
+    }
   }
 
   /** Per rendered frame: interpolated hero position and the cinematic camera. */
@@ -119,7 +133,8 @@ export class AttractMode {
       off.multiplyScalar(Math.exp(-dt / Math.max(0.01, tuning.recovery.blendTime / 3)));
     }
     // A teleport (rescue, water respawn) is a cut, never a whip pan.
-    if (this.renderPos.distanceToSquared(this.lastFrame) > 30 * 30) this.director.reset();
+    if (this.cutPending || this.renderPos.distanceToSquared(this.lastFrame) > 30 * 30) this.director.reset();
+    this.cutPending = false;
     this.lastFrame.copy(this.renderPos);
     this.subject.perching = this.autopilot.perching;
     this.animator.perch = this.autopilot.perching ? 1 : 0;

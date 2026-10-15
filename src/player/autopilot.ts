@@ -336,6 +336,8 @@ export class Autopilot {
   readonly goal: Waypoint = { x: 0, z: 0, kind: WP_PARK, building: -1, roofY: 0 };
   /** Standing on a roof on purpose (the camera orbits). */
   perching = false;
+  /** Rescue teleports so far (the attract mode treats each as a camera cut). */
+  teleports = 0;
   readonly stats: AutopilotStats = { legs: 0, zips: 0, wallRuns: 0, dives: 0, perches: 0, perchTries: 0, reroutes: 0, rescues: 0 };
   private readonly rng: Rng;
   /** The leg to the goal along avenues and streets (up to 7 points with pond detours) and where the hero is on it. */
@@ -653,7 +655,10 @@ export class Autopilot {
         best = w;
       }
     }
-    if (best && pl.findSafeSpot(best.x, best.roofY + 1, best.z, this.spot)) pl.teleport(this.spot.x, this.spot.y, this.spot.z);
+    if (best && pl.findSafeSpot(best.x, best.roofY + 1, best.z, this.spot)) {
+      pl.teleport(this.spot.x, this.spot.y, this.spot.z);
+      this.teleports++;
+    }
     this.progress.copy(pl.pos);
     this.progressT = 0;
     this.pickGoal();

@@ -32,6 +32,8 @@ export const shared = {
   /** Sky colour reflected by glass. */
   uSkyRefl: { value: new Color(0x9fc7e6) } as IUniform<Color>,
   uWinAtlas: { value: null as Texture | null } as IUniform<Texture | null>,
+  /** Hero-only cinematic rim and fill (0 off .. 1 full): night and the rooftop moment. */
+  uHeroLight: { value: 0 } as IUniform<number>,
 };
 
 let gradientTex: DataTexture | null = null;

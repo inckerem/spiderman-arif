@@ -65,7 +65,10 @@ interface RopeState {
   goodWindow: boolean;
   losBlocked: number;
   groundTime: number;
+  /** Fired from the ground or a wall: ground movement in flight, launch on attach. */
   fromGround: boolean;
+  /** Fired from the ground (not a wall): Space jumps while the line is in flight. */
+  onGround: boolean;
   /** Fired by the swing button: the line lasts only while the button is held. */
   byButton: boolean;
 }
@@ -217,6 +220,7 @@ export class Player {
       losBlocked: 0,
       groundTime: 0,
       fromGround: false,
+      onGround: false,
       byButton: false,
     };
     this.zip = {
@@ -321,12 +325,12 @@ export class Player {
     // release edge (pause, lost focus) never leaves it attached, and a click
     // shorter than a tick still fires (and lets go on the next tick, a tap).
     // Space also cuts a line (the held button then waits for a new press),
-    // except while a line fired from the ground is still in flight: then it
-    // jumps and the line keeps flying. The right click starts a pull line,
+    // except while a line fired from the ground (not a wall) is still in
+    // flight: then it jumps and the line keeps flying. The right click starts a pull line,
     // which Space cuts.
     if (inp.swingPressed) this.holdSwing = true;
     else if (!inp.swing) this.holdSwing = false;
-    const flightFromGround = this.mode === MODE_SWING && this.rope.firing && this.rope.fromGround;
+    const flightFromGround = this.mode === MODE_SWING && this.rope.firing && this.rope.onGround;
     if (inp.jumpPressed && flightFromGround && this.supportedFeet()) {
       this.jumpBuffer = 0;
       this.vel.y = Math.max(this.vel.y, tuning.ground.jumpSpeed);
@@ -761,6 +765,7 @@ export class Player {
     rope.losBlocked = 0;
     rope.groundTime = 0;
     rope.fromGround = this.mode === MODE_GROUND || this.mode === MODE_WALL;
+    rope.onGround = this.mode === MODE_GROUND;
     rope.byButton = true;
     rope.tension = 0;
     this.holdSwing = false;
@@ -1735,6 +1740,7 @@ export class Player {
     rope.losBlocked = 0;
     rope.groundTime = 0;
     rope.fromGround = false;
+    rope.onGround = false;
     rope.byButton = false;
   }
 

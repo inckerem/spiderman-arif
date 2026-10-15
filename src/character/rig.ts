@@ -1,6 +1,6 @@
 import { Bone, BufferAttribute, Matrix4, Quaternion, Skeleton, SkinnedMesh, Vector3, MeshToonMaterial } from 'three';
 import { GeomBuilder } from '../render/geomBuilder';
-import { toonGradient, withMRT } from '../render/materials';
+import { shared, toonGradient, withMRT } from '../render/materials';
 import { COSTUMES, DEFAULT_COSTUME, SLOTS, type CostumeId, type Slot } from './costumes';
 
 const smooth01 = (x: number): number => {
@@ -379,12 +379,22 @@ export function buildCharacter(costume: CostumeId = DEFAULT_COSTUME): CharacterR
   }
   const mat = new MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient() });
   withMRT(mat, true, 'hero', (shader) => {
+    shader.uniforms.uHeroLight = shared.uHeroLight;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute float aEmit;\nvarying float vEmit;')
       .replace('#include <color_vertex>', '#include <color_vertex>\nvEmit = aEmit;');
+    // Cinematic light on the hero only (night, the rooftop moment): a fill
+    // that lifts the suit's own colours and a cool rim on the silhouette, so
+    // the suit reads against a dark roof without brightening the scene.
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vEmit;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * vEmit * 0.9;');
+      .replace('#include <common>', '#include <common>\nvarying float vEmit;\nuniform float uHeroLight;')
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+totalEmissiveRadiance += diffuseColor.rgb * vEmit * 0.9;
+float heroRim = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
+totalEmissiveRadiance += uHeroLight * (diffuseColor.rgb * 0.32 + vec3(0.42, 0.52, 0.75) * heroRim * 0.45);`,
+      );
   });
   const mesh = new SkinnedMesh(geometry, mat);
   mesh.add(root);

@@ -102,6 +102,10 @@ export class App {
     };
     game.animator.onFootstep = (f) => audio.footstep(f.surface, f.intensity);
     this.moment.onThunder = (closeness) => audio.thunder(closeness);
+    // The moment's music starts from the top of the track.
+    this.moment.onStart = () => audio.restartMusic();
+    // Hour keys during the moment: the new hour wins over the restore.
+    game.onHourKey = () => this.moment.takeHour();
     game.input.onLock((locked) => this.onLock(locked));
     // Audio may only start after a user gesture.
     const unlock = (): void => {
@@ -126,6 +130,7 @@ export class App {
   play(): void {
     const game = this.game;
     this.moment.cancel();
+    this.moment.resetSpawn();
     this.ui.hideMenus();
     this.ui.setHudVisible(true);
     game.input.clearAll();
@@ -211,12 +216,20 @@ export class App {
     game.beginPhoto();
     this.ui.hideMenus();
     this.ui.showClickToResume(false);
+    // Where the time slider starts (5-minute steps).
+    let sliderHour = (Math.round((game.dayNight.hour * 60) / 5) * 5) / 60;
     this.ui.showPhoto({
       fov: game.photoCam.fov,
       hour: game.dayNight.hour,
       onChange: (fov, hour) => {
         game.photoCam.fov = fov;
-        game.dayNight.setHour(hour);
+        // Only a moved time slider sets the hour (a FOV change leaves it alone);
+        // during the rooftop moment the new hour wins over the restore.
+        if (Math.abs(hour - sliderHour) > 1e-6) {
+          sliderHour = hour;
+          this.moment.takeHour();
+          game.dayNight.setHour(hour);
+        }
       },
       onSave: () => {
         game.savePhoto();
@@ -342,6 +355,9 @@ export class App {
       case 'splash':
         a.splash();
         break;
+      case 'respawn':
+        this.moment.resetSpawn();
+        break;
       default:
         break;
     }
@@ -390,11 +406,12 @@ export class App {
       ui.updateMinimap(pl.pos.x, pl.pos.z, game.rig.yaw, this.minimapRings);
     }
     ui.updateHud(hud);
-    // Audio listener.
+    // Audio listener: the hero on screen (in the menu, the attract hero).
     const L = this.listener;
+    const ap = this.state === 'menu' ? game.attract.player : pl;
     const P = game.layout.park;
-    const dx = Math.max(P.minX - pl.pos.x, 0, pl.pos.x - P.maxX);
-    const dz = Math.max(P.minZ - pl.pos.z, 0, pl.pos.z - P.maxZ);
+    const dx = Math.max(P.minX - ap.pos.x, 0, ap.pos.x - P.maxX);
+    const dz = Math.max(P.minZ - ap.pos.z, 0, ap.pos.z - P.maxZ);
     this.waterTimer -= dt;
     if (this.waterTimer <= 0) {
       this.waterTimer = 0.3;
@@ -402,18 +419,18 @@ export class App {
       const t = game.world.terrain;
       for (let i = 0; i < WATER_SAMPLES; i++) {
         const a = (i / WATER_SAMPLES) * Math.PI * 2;
-        if (t.isWater(pl.pos.x + Math.cos(a) * 70, pl.pos.z + Math.sin(a) * 70)) n++;
+        if (t.isWater(ap.pos.x + Math.cos(a) * 70, ap.pos.z + Math.sin(a) * 70)) n++;
       }
       this.waterFactor = clamp((n / WATER_SAMPLES) * 2, 0, 1);
     }
-    const ground = pl.groundBelow(pl.pos.x, pl.pos.y, pl.pos.z);
-    L.speed = this.state === 'menu' ? 0 : pl.speed;
-    L.altitude = Math.max(0, pl.pos.y - (ground > -1e6 ? ground : 0));
+    const ground = ap.groundBelow(ap.pos.x, ap.pos.y, ap.pos.z);
+    L.speed = this.state === 'menu' ? 0 : ap.speed;
+    L.altitude = Math.max(0, ap.pos.y - (ground > -1e6 ? ground : 0));
     L.parkFactor = 1 - smoothstep(0, 90, Math.hypot(dx, dz));
     L.nightFactor = game.dayNight.night;
     L.waterFactor = this.waterFactor;
-    L.swinging = pl.mode === MODE_SWING || pl.mode === MODE_ZIP;
-    L.diving = pl.diving;
+    L.swinging = ap.mode === MODE_SWING || ap.mode === MODE_ZIP;
+    L.diving = ap.diving;
     L.paused = this.state !== 'playing' || !game.playing;
     L.rain = game.weather.rain;
     this.audio.update(dt, L);

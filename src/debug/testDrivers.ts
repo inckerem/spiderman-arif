@@ -818,7 +818,8 @@ export function lineControlsTest(game: Game): Record<string, number | boolean> {
  * Line edge cases through the real mouse handlers: held state cleared without
  * a release (pause, lost lock or focus) lets go of the line; a click shorter
  * than a tick still fires (and lets go next tick, a tap); Space while a line
- * fired from the ground is in flight jumps and keeps the line.
+ * fired from the ground is in flight jumps and keeps the line, while one fired
+ * from a wall is cut.
  */
 export function lineEdgeCasesTest(game: Game): Record<string, number | boolean> {
   const pl = game.player;
@@ -910,6 +911,53 @@ export function lineEdgeCasesTest(game: Game): Record<string, number | boolean> 
   r.attachedAfterSpace = pl.rope.attached;
   inp.swing = false;
   step();
+  // 5. Space while a line fired from a wall is in flight cuts it (no jump),
+  // even clinging at the foot of the facade where the feet still have support.
+  r.wallClung = false;
+  r.wallPlanned = false;
+  for (const b of game.layout.buildings) {
+    if (b.height < 45) continue;
+    const f = b.footprint;
+    if (f.maxX - f.minX < 16) continue;
+    const cx = (f.minX + f.maxX) / 2;
+    if (!pl.findSafeSpot(cx, 0.6, f.maxZ + 0.5, out) || Math.abs(out.z - (f.maxZ + 0.5)) > 0.3 || out.y > 1) continue;
+    Object.assign(inp, emptyBotInput());
+    Object.assign(prev, inp);
+    pl.teleport(out.x, out.y, out.z);
+    game.rig.setLook(0, 0);
+    game.snapCamera();
+    for (let i = 0; i < 10; i++) step();
+    // Lean into the facade with Shift held: cling with almost no run-up.
+    Object.assign(inp, { moveY: 0.4, sprint: true });
+    for (let i = 0; i < 30 && pl.mode !== MODE_WALL; i++) step();
+    inp.moveY = 0;
+    for (let i = 0; i < 12; i++) step();
+    if (pl.mode !== MODE_WALL) continue;
+    r.wallClung = true;
+    let wallPlanned = false;
+    for (let k = 0; k < 9 && !wallPlanned; k++) {
+      game.rig.setLook(Math.PI + (k - 4) * 0.25, 0.45);
+      game.snapCamera();
+      wallPlanned = planTarget(game, 0, a) && Math.hypot(a.x - pl.pos.x, a.y - pl.pos.y, a.z - pl.pos.z) > 20;
+    }
+    if (!wallPlanned) continue;
+    r.wallPlanned = true;
+    aimAt(game, a.x, a.y, a.z);
+    r.wallFeetHeight = pl.pos.y - out.y;
+    e0 = game.eventLog.length;
+    inp.swing = true;
+    step();
+    r.firedFromWall = pl.rope.firing && pl.rope.fromGround && !pl.rope.onGround;
+    inp.jump = true;
+    step();
+    inp.jump = false;
+    r.wallSpaceJumped = events(e0).includes('jump');
+    r.wallSpaceCut = (pl.mode as number) !== MODE_SWING && !pl.rope.firing && !pl.rope.attached;
+    inp.swing = false;
+    Object.assign(inp, emptyBotInput());
+    step();
+    break;
+  }
   return r;
 }
 
@@ -955,12 +1003,16 @@ export function trickReplayTest(game: Game): Record<string, number | boolean> {
  * a load spike lowers the scale to its floor, the scale returns to full once
  * the render cost drops, a cost inside the hysteresis band changes nothing,
  * and a GPU-bound cost that shrinks with the scale settles without hunting.
+ * At a pixel ratio of 1.5 the floor is 0.5 (0.75 x the CSS pixels). A
+ * marginal machine (fine one step lower, too slow at the next) backs off up
+ * to 30 s between attempts, and a calm minute clears the back-off.
  */
 export function dynResTest(game: Game): Record<string, number> {
   const post = game.post;
-  const saved = { on: post.settings.dynamicResolution, max: post.settings.maxDynScale };
+  const saved = { on: post.settings.dynamicResolution, max: post.settings.maxDynScale, pr: post.pixelRatio };
   post.settings.dynamicResolution = true;
   post.settings.maxDynScale = 1;
+  post.pixelRatio = 1;
   const frames = (cost: (scale: number) => number, seconds: number): number => {
     let changes = 0;
     for (let i = 0; i < seconds * 60; i++) {
@@ -971,8 +1023,9 @@ export function dynResTest(game: Game): Record<string, number> {
     return changes;
   };
   // Settle first: a long calm period also clears any raise back-off from loading.
-  frames(() => 5, 25);
+  frames(() => 5, 65);
   const start = post.dynScale;
+  const floor = post.dynFloor;
   frames(() => 25, 3);
   const afterSpike = post.dynScale;
   let recoverFrames = 0;
@@ -987,9 +1040,53 @@ export function dynResTest(game: Game): Record<string, number> {
   const gpuBoundScale = post.dynScale;
   frames(() => 5, 30);
   const end = post.dynScale;
+  // HiDPI (pixel ratio 1.5): a long spike goes down to 0.75 x the CSS pixels.
+  post.pixelRatio = 1.5;
+  const hiDpiFloor = post.dynFloor;
+  frames(() => 25, 8);
+  const hiDpiAfterSpike = post.dynScale;
+  frames(() => 5, 15);
+  const hiDpiRecovered = post.dynScale;
+  post.pixelRatio = 1;
+  // Marginal machine: cheap enough at 0.85, too slow at 0.9. Each raise that
+  // has to be undone doubles the hold, so attempts end up 30 s apart.
+  const raises: number[] = [];
+  for (let i = 0; i < 300 * 60; i++) {
+    const before = post.dynScale;
+    post.stepDynamic(post.dynScale > 0.875 ? 20 : 8, 16.7);
+    if (post.dynScale > before) raises.push(i / 60);
+  }
+  let marginalMinGap = 1e9;
+  for (let k = 1; k < raises.length; k++) if (raises[k - 1]! >= 150) marginalMinGap = Math.min(marginalMinGap, raises[k]! - raises[k - 1]!);
+  const marginalRaises = raises.length;
+  // A calm minute clears the back-off: the next spike recovers as fast as the first.
+  frames(() => 5, 70);
+  frames(() => 25, 3);
+  let recoverAgainFrames = 0;
+  while (post.dynScale < 1 && recoverAgainFrames < 60 * 40) {
+    post.stepDynamic(5, 16.7);
+    recoverAgainFrames++;
+  }
   post.settings.dynamicResolution = saved.on;
   post.settings.maxDynScale = saved.max;
-  return { start, afterSpike, recoverSeconds: recoverFrames / 60, recovered, bandChanges, gpuBoundScale, gpuBoundChanges, end };
+  post.pixelRatio = saved.pr;
+  return {
+    start,
+    floor,
+    afterSpike,
+    recoverSeconds: recoverFrames / 60,
+    recovered,
+    bandChanges,
+    gpuBoundScale,
+    gpuBoundChanges,
+    end,
+    hiDpiFloor,
+    hiDpiAfterSpike,
+    hiDpiRecovered,
+    marginalRaises,
+    marginalMinGap,
+    recoverAgainSeconds: recoverAgainFrames / 60,
+  };
 }
 
 /**
@@ -1450,6 +1547,10 @@ export function soakMinute(game: Game, app: App | undefined, minute: number): Re
     // HUD off: 720 app frames would redraw the minimap canvas each time (GPU work the soak does not need).
     app.ui.setHudVisible(false);
     momentRoof(game);
+    // The soak's minutes of swinging run outside the app frames that count play
+    // time and movement for the moment's arming gate: count them here.
+    app.moment.sinceSpawn = Math.max(app.moment.sinceSpawn, tuning.moment.minPlaySeconds);
+    app.moment.usedLine = true;
     const still = emptyBotInput(),
       prevStill = emptyBotInput();
     momentFrames(game, app, still, prevStill, 8, 0, 4);
@@ -1735,6 +1836,14 @@ export function momentState(game: Game, app: App): Record<string, unknown> {
     starts: m.stats.starts,
     ends: m.stats.ends,
     bolts: m.stats.bolts,
+    onRoof: m.stillOnRoof(),
+    ready: m.ready,
+    sinceSpawn: m.sinceSpawn,
+    travelled: m.travelled,
+    usedLine: m.usedLine,
+    hourTaken: m.hourTaken,
+    flash: game.weather.flash,
+    camDist: game.rig.camera.position.distanceTo(new Vector3(game.renderPos.x, game.renderPos.y + 1.2, game.renderPos.z)),
     mode: MODE_NAMES[game.player.mode],
     speed: game.player.speed,
     pos: [game.player.pos.x, game.player.pos.y, game.player.pos.z],
