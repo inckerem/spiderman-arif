@@ -9,10 +9,15 @@
 //   --rebuild    build even if the sources did not change
 //   --reinstall  reinstall the npm packages
 //   --check      start, verify that the page and its files are served, then exit
+//   --sunucu     serve with the game server (dist-server/server.mjs) instead of
+//                vite preview: the game and multiplayer rooms on one port,
+//                reachable from the local network (phones on the same Wi-Fi)
 //
 // Console text is Turkish, like the rest of the player-facing interface.
 
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -27,6 +32,9 @@ const nodeCheck = require('./check-node.cjs');
 const BUILD_INPUTS = ['index.html', 'vite.config.ts', 'tsconfig.json', 'package-lock.json', 'src', 'public'];
 const INSTALL_STAMP = join('node_modules', '.skythread-install');
 const BUILD_STAMP = join('dist', '.skythread-build');
+// The game server bundle also depends on these.
+const SERVER_INPUTS = [...BUILD_INPUTS, 'server', 'vite.server.config.ts', 'tsconfig.server.json'];
+const SERVER_STAMP = join('dist-server', '.skythread-build');
 const PREVIEW_PORT = 4173;
 const DEV_PORT = 5173;
 
@@ -35,7 +43,9 @@ const USAGE = `Kullanım: node scripts/launch.mjs [seçenekler]
   --no-open    tarayıcıyı açma
   --rebuild    değişiklik olmasa da yeniden derle
   --reinstall  paketleri yeniden kur
-  --check      başlat, sayfanın sunulduğunu doğrula ve çık`;
+  --check      başlat, sayfanın sunulduğunu doğrula ve çık
+  --sunucu     oyun sunucusuyla başlat (çok oyunculu odalar; aynı ağdaki
+               telefon ve bilgisayarlar da bağlanabilir)`;
 
 class LaunchError extends Error {}
 
@@ -43,13 +53,14 @@ const say = (text = '') => console.log(text);
 const seconds = (t0) => ((Date.now() - t0) / 1000).toFixed(1);
 
 function parseArgs(argv) {
-  const flags = { dev: false, open: true, rebuild: false, reinstall: false, check: false };
+  const flags = { dev: false, open: true, rebuild: false, reinstall: false, check: false, server: false };
   for (const arg of argv) {
     if (arg === '--dev') flags.dev = true;
     else if (arg === '--no-open') flags.open = false;
     else if (arg === '--rebuild') flags.rebuild = true;
     else if (arg === '--reinstall') flags.reinstall = true;
     else if (arg === '--check') flags.check = true;
+    else if (arg === '--sunucu') flags.server = true;
     else if (arg === '--help' || arg === '-h') {
       say(USAGE);
       process.exit(0);
@@ -57,6 +68,7 @@ function parseArgs(argv) {
       throw new LaunchError(`Bilinmeyen seçenek: ${arg}\n${USAGE}`);
     }
   }
+  if (flags.dev && flags.server) throw new LaunchError('--dev ve --sunucu birlikte kullanılamaz.');
   return flags;
 }
 
@@ -97,7 +109,7 @@ function ensurePackages(force) {
   say(`Paketler hazır (${seconds(t0)} sn).`);
 }
 
-function sourceHash() {
+function sourceHash(inputs = BUILD_INPUTS) {
   const hash = createHash('sha256');
   const walk = (path) => {
     if (statSync(path).isDirectory()) {
@@ -108,7 +120,7 @@ function sourceHash() {
       hash.update(path.replaceAll('\\', '/')).update('\0').update(readFileSync(path)).update('\0');
     }
   };
-  for (const input of BUILD_INPUTS) if (existsSync(input)) walk(input);
+  for (const input of inputs) if (existsSync(input)) walk(input);
   return hash.digest('hex');
 }
 
@@ -125,6 +137,77 @@ async function ensureBuild(force) {
   await build({ root: ROOT, logLevel: 'warn' });
   writeFileSync(BUILD_STAMP, `${hash}\n`);
   say(`Derleme tamam (${seconds(t0)} sn).`);
+}
+
+// Game server bundle (dist-server/server.mjs) when missing or built from other sources.
+async function ensureServerBuild(force) {
+  const hash = sourceHash(SERVER_INPUTS);
+  const current = existsSync(join('dist-server', 'server.mjs')) && existsSync(SERVER_STAMP) && readFileSync(SERVER_STAMP, 'utf8').trim() === hash;
+  if (current && !force) return;
+  say('Oyun sunucusu derleniyor...');
+  const t0 = Date.now();
+  const { build } = await import('vite');
+  await build({ root: ROOT, configFile: join(ROOT, 'vite.server.config.ts'), logLevel: 'warn' });
+  writeFileSync(SERVER_STAMP, `${hash}\n`);
+  say(`Sunucu derlemesi tamam (${seconds(t0)} sn).`);
+}
+
+// First free TCP port from `start` on all interfaces.
+function freePort(start) {
+  const tryPort = (port) =>
+    new Promise((resolve) => {
+      const probe = createServer();
+      probe.once('error', () => resolve(false));
+      probe.listen(port, '0.0.0.0', () => probe.close(() => resolve(true)));
+    });
+  return (async () => {
+    for (let p = start; p < start + 50; p++) if (await tryPort(p)) return p;
+    throw new LaunchError(`${start}-${start + 49} arasında boş port bulunamadı.`);
+  })();
+}
+
+// IPv4 addresses other devices on the local network can use.
+function lanAddresses() {
+  const out = [];
+  for (const list of Object.values(networkInterfaces())) {
+    for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+  }
+  return out;
+}
+
+// The game server (static dist/ plus /ws rooms) on 0.0.0.0 so phones and other
+// computers on the same network can join; the console shows its addresses.
+async function serveGameServer() {
+  const port = await freePort(PREVIEW_PORT);
+  const child = spawn(
+    process.execPath,
+    ['dist-server/server.mjs', `--port=${port}`, '--host=0.0.0.0', '--static=dist', '--log-level=warn'],
+    { cwd: ROOT, stdio: ['ignore', 'inherit', 'inherit'] },
+  );
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  const url = `http://127.0.0.1:${port}/`;
+  const t0 = Date.now();
+  for (;;) {
+    if (child.exitCode !== null) throw new LaunchError('Oyun sunucusu başlatılamadı.');
+    try {
+      if ((await fetch(`${url}healthz`)).ok) break;
+    } catch {
+      // not listening yet
+    }
+    if (Date.now() - t0 > 30000) {
+      child.kill();
+      throw new LaunchError('Oyun sunucusu 30 saniyede yanıt vermedi.');
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return {
+    url,
+    lan: lanAddresses().map((a) => `http://${a}:${port}/`),
+    close: () => {
+      if (child.exitCode === null) child.kill('SIGTERM');
+      return Promise.race([exited, new Promise((r) => setTimeout(r, 4000))]);
+    },
+  };
 }
 
 async function serve(dev) {
@@ -217,10 +300,16 @@ async function main() {
   say(`Node.js ${process.version} (${process.platform}-${process.arch})`);
   ensurePackages(flags.reinstall);
   if (!flags.dev) await ensureBuild(flags.rebuild);
-  const server = await serve(flags.dev);
+  if (flags.server) await ensureServerBuild(flags.rebuild);
+  const server = flags.server ? await serveGameServer() : await serve(flags.dev);
   if (flags.check) {
     try {
       await selfCheck(server.url);
+      if (flags.server) {
+        const health = await (await fetch(`${server.url}healthz`)).json();
+        if (!health.ok) throw new LaunchError('Oyun sunucusu sağlıklı değil.');
+        say(`Oyun sunucusu çalışıyor (protokol ${health.protocol}).`);
+      }
     } finally {
       await server.close();
     }
@@ -228,6 +317,13 @@ async function main() {
   }
   say();
   say(`Oyun hazır: ${server.url}`);
+  if (server.lan) {
+    if (server.lan.length) {
+      say('Aynı ağdaki telefon ve bilgisayarlar şu adresle katılabilir:');
+      for (const u of server.lan) say(`  ${u}`);
+    } else say('Yerel ağ adresi bulunamadı; yalnızca bu bilgisayardan bağlanılabilir.');
+    say('Güvenlik duvarı sorarsa yerel ağ erişimine izin verin.');
+  }
   if (flags.open) {
     const opened = await openBrowser(server.url);
     say(opened ? 'Tarayıcıda açıldı.' : 'Tarayıcı kendiliğinden açılamadı; adresi tarayıcınıza yapıştırın.');

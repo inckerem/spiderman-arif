@@ -18,7 +18,7 @@ Clone the repository and start the launcher for your system:
 
 Nothing has to be installed first. When Node.js is missing or too old, the launcher downloads a portable Node.js 22 into `.tools/` (checked against a pinned SHA-256; no admin rights, nothing installed system-wide). It then installs the npm packages, builds the game, serves it on http://127.0.0.1:4173 and opens the default browser. The first start downloads about 100 MB and takes a few minutes. Later starts take a few seconds and rebuild only when the sources changed. The launcher window keeps the game server running; close it or press Ctrl+C to stop.
 
-Options (pass them on the command line): `--dev` (dev server with hot reload), `--no-open`, `--rebuild`, `--reinstall`, `--check` (start, check that the page is served, exit). `SKYTHREAD_NODE=portable` ignores an installed Node.js. Deleting `.tools/` removes the portable Node.js.
+Options (pass them on the command line): `--dev` (dev server with hot reload), `--no-open`, `--rebuild`, `--reinstall`, `--check` (start, check that the page is served, exit), `--sunucu` (serve with the multiplayer game server instead: the game and its rooms on one port, reachable from the local network, so phones and other computers on the same Wi-Fi can open the address the launcher prints; allow local network access if the firewall asks). `SKYTHREAD_NODE=portable` ignores an installed Node.js. Deleting `.tools/` removes the portable Node.js.
 
 A downloaded ZIP (instead of a clone) can trigger a security prompt. On macOS, run `sh BASLAT-Mac.command` in Terminal, or allow the file under System Settings > Privacy & Security. On Windows, choose "More info" and then "Run anyway".
 
