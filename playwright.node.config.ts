@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test';
 // built game server. `npm run test:server`. The main config runs them too.
 export default defineConfig({
   testDir: './tests',
-  testMatch: ['server.spec.ts', 'serverE2e.spec.ts', 'serverCombat.spec.ts', 'combatSim.spec.ts'],
+  testMatch: ['server.spec.ts', 'serverE2e.spec.ts', 'serverCombat.spec.ts', 'combatSim.spec.ts', 'serverLoad.load.ts'],
   timeout: 120 * 1000,
   fullyParallel: false,
   workers: 1,

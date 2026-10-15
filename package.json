@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "playwright test",
     "test:quick": "playwright test --grep @quick",
-    "test:server": "playwright test -c playwright.node.config.ts"
+    "test:server": "playwright test -c playwright.node.config.ts --grep-invert @load",
+    "test:server:load": "playwright test -c playwright.node.config.ts --grep @load"
   },
   "dependencies": {
     "lil-gui": "0.21.0",

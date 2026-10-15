@@ -170,6 +170,7 @@ npm test                         # whole suite (starts the dev server if needed)
 npx playwright test tests/soak.spec.ts   # 30 simulated minutes (long)
 npm run test:quick               # smoke test only
 npm run test:server              # game server checks in Node (no browser, no dev server)
+npm run test:server:load         # server load test: 16 bots + 30 enemies in one room, then 10 rooms (about 2 min)
 ```
 
 | Test | Checks |

@@ -70,6 +70,9 @@ export function startServer(cfg: ServerConfig, opts: StartOptions = {}): Promise
   const server = http.createServer((req, res) => {
     const urlPath = (req.url ?? '/').split('?')[0];
     if (urlPath === '/healthz' || urlPath.endsWith('/healthz')) {
+      const query = new URLSearchParams((req.url ?? '').split('?')[1] ?? '');
+      // Load-test detail (step timings, CPU, memory) only on test servers: it lists rooms.
+      const detail = cfg.testHooks && query.get('detail') === '1';
       const body = JSON.stringify({
         ok: true,
         rooms: manager.rooms.size,
@@ -78,6 +81,7 @@ export function startServer(cfg: ServerConfig, opts: StartOptions = {}): Promise
         uptime: Math.round(now() / 1000),
         version,
         protocol: PROTOCOL_VERSION,
+        ...(detail ? { detail: { ...manager.stats(query.get('reset') === '1'), cpu: process.cpuUsage(), memory: process.memoryUsage() } } : {}),
       });
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(req.method === 'HEAD' ? undefined : body);

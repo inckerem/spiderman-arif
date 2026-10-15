@@ -45,6 +45,34 @@ export interface RoomManagerOptions {
   log?: Log;
 }
 
+/** Rolling step timings (ms) for load measurements. */
+class Timings {
+  readonly buf = new Float64Array(8192);
+  n = 0;
+  add(ms: number): void {
+    this.buf[this.n % this.buf.length] = ms;
+    this.n++;
+  }
+  clear(): void {
+    this.n = 0;
+  }
+  summary(): { n: number; p50: number; p95: number; max: number; mean: number } {
+    const k = Math.min(this.n, this.buf.length);
+    if (!k) return { n: 0, p50: 0, p95: 0, max: 0, mean: 0 };
+    const a = Array.from(this.buf.subarray(0, k)).sort((x, y) => x - y);
+    const q = (f: number) => a[Math.min(k - 1, Math.floor(f * k))];
+    return { n: this.n, p50: q(0.5), p95: q(0.95), max: a[k - 1], mean: a.reduce((x, y) => x + y, 0) / k };
+  }
+}
+
+export interface RoomStats {
+  /** "manhattan#1" for public rooms, "private" otherwise (codes are never listed). */
+  name: string;
+  players: number;
+  enemies: number;
+  step: ReturnType<Timings['summary']>;
+}
+
 export type HelloResult = { ok: true; mr: ManagedRoom; pid: number; resumed: boolean } | { ok: false; why: RejectWhy };
 
 type Hello = Extract<ClientMsg, { t: 'hello' }>;
@@ -57,6 +85,8 @@ export class RoomManager {
   private readonly simFactory: RoomSimFactory;
   private readonly randInt: (n: number) => number;
   private readonly log: Log;
+  private readonly stepTimes = new Map<ManagedRoom, Timings>();
+  private readonly tickTimes = new Timings();
 
   constructor(readonly opts: RoomManagerOptions) {
     this.simFactory = opts.simFactory ?? combatSimFactory;
@@ -201,16 +231,40 @@ export class RoomManager {
 
   /** Steps every room and closes rooms nobody needs any more. */
   tick(nowMs: number): void {
+    const t0 = performance.now();
     for (const mr of this.rooms.values()) {
+      const ts = performance.now();
       mr.room.step(nowMs);
+      let tm = this.stepTimes.get(mr);
+      if (!tm) this.stepTimes.set(mr, (tm = new Timings()));
+      tm.add(performance.now() - ts);
       const r = mr.room;
       if (!r.empty) continue;
       if (mr.publicRoom ? mr.index > 1 : nowMs - r.emptySince >= this.opts.privateRoomIdleS * 1000) this.close(mr);
     }
+    this.tickTimes.add(performance.now() - t0);
+  }
+
+  /** Step timings per room and for whole ticks (load tests); `reset` starts a new window. */
+  stats(reset = false): { tick: ReturnType<Timings['summary']>; rooms: RoomStats[] } {
+    const rooms: RoomStats[] = [];
+    for (const [mr, tm] of this.stepTimes) {
+      rooms.push({
+        name: mr.publicRoom ? mr.room.id : 'private',
+        players: mr.room.players.size,
+        enemies: mr.room.sim.enemyCount(),
+        step: tm.summary(),
+      });
+      if (reset) tm.clear();
+    }
+    const tick = this.tickTimes.summary();
+    if (reset) this.tickTimes.clear();
+    return { tick, rooms };
   }
 
   private close(mr: ManagedRoom): void {
     this.rooms.delete(mr.room.id);
+    this.stepTimes.delete(mr);
     if (mr.code) this.byCode.delete(mr.code);
     for (const [token, r] of this.byToken) if (r === mr) this.byToken.delete(token);
     this.log.info('room closed', { id: mr.room.id });
