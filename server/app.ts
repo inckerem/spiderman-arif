@@ -8,6 +8,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { NET, PROTOCOL_VERSION } from '../src/net/protocol';
 import { ROOM_HZ } from '../src/sim/room';
+import { nullSimFactory } from '../src/sim/nullSim';
 import type { RoomSimFactory } from '../src/sim/types';
 import type { ServerConfig } from './config';
 import { ConnLimiter, RATE, clientIp } from './limits';
@@ -56,12 +57,10 @@ export function startServer(cfg: ServerConfig, opts: StartOptions = {}): Promise
     privateRoomIdleS: cfg.privateRoomIdleS,
     reconnectGraceS: cfg.reconnectGraceS,
     testHooks: cfg.testHooks,
-    simFactory: opts.simFactory,
+    simFactory: opts.simFactory ?? (cfg.sim === 'null' ? nullSimFactory : undefined),
     log,
   });
-  const tMaps = performance.now();
   manager.prepareMaps();
-  log.info('maps ready', { ms: Math.round(performance.now() - tMaps) });
 
   const sessions = new Set<Session>();
   const sockets = new Set<WebSocket>();
@@ -146,7 +145,7 @@ export function startServer(cfg: ServerConfig, opts: StartOptions = {}): Promise
       server.off('error', reject);
       const addr = server.address();
       const port = typeof addr === 'object' && addr ? addr.port : cfg.port;
-      log.info('listening', { host: cfg.host, port, static: cfg.staticDir || null, testHooks: cfg.testHooks });
+      log.info('listening', { host: cfg.host, port, static: cfg.staticDir || null, testHooks: cfg.testHooks, sim: cfg.sim });
       loop();
       resolve({
         port,

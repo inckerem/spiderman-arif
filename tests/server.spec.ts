@@ -29,8 +29,12 @@ import { checkName, isProfane, uniqueName, nameKey } from '../src/net/names';
 import { tr } from '../src/i18n/tr';
 import { ClockSync, DayClock, hourDelta, pullHour, wrapHour } from '../src/net/clock';
 import { InterpBuffer, INTERP_AHEAD, INTERP_BETWEEN, INTERP_EMPTY, INTERP_HELD, lerpAngle } from '../src/net/interp';
-import { buildMapRuntime } from '../src/sim/mapRuntime';
+import { buildMapRuntime } from '../server/mapRuntime';
 import { NullSim } from '../src/sim/nullSim';
+import { CombatRoomSim, combatSimFactory } from '../src/sim/combatRoomSim';
+import { CombatSim } from '../src/combat/combatSim';
+import { AR } from '../src/combat/spawnPoints';
+import { tuning } from '../src/config/tuning';
 import { Room, STATE_CORRECTED, STATE_DROPPED, STATE_KICKED, STATE_OK, type RoomOut } from '../src/sim/room';
 import { HERO_ID_BASE, makeEnemySnap, type CombatEvent, type EnemySnap, type MapRuntime } from '../src/sim/types';
 import { RoomManager, type Peer } from '../server/roomManager';
@@ -604,29 +608,22 @@ test.describe('room', () => {
     expect(last.dayLen).toBe(room.clock.dayLen);
   });
 
-  test('PvP: hero targets rejected in public rooms, passed to the sim in private PvP rooms', () => {
-    const pub = makeRoom({ pvp: true, publicRoom: true });
-    expect(pub.room.pvp).toBe(false);
-    const a = admit(pub.room, 'Vurucu');
-    pub.room.onIntent(a, { k: 'strike', seq: 9, target: HERO_ID_BASE + 2, move: 0, viewT: 1, hx: 0, hy: 0, hz: 0 });
-    expect(pub.out.json(a, 'ce')).toEqual([{ t: 'ce', ev: [{ e: 'rej', pid: a, seq: 9, why: 'pvp' }] }]);
-    expect(pub.sim.intents.length).toBe(0);
-    pub.room.onIntent(a, { k: 'strike', seq: 10, target: 5, move: 0, viewT: 1, hx: 0, hy: 0, hz: 0 });
-    expect(pub.sim.intents.length).toBe(1);
-
+  test('intents reach the sim with times in sim seconds; debug hooks only with testHooks', () => {
     const priv = makeRoom({ pvp: true, publicRoom: false });
     expect(priv.room.pvp).toBe(true);
+    expect(makeRoom({ pvp: true, publicRoom: true }).room.pvp).toBe(false);
     const b = admit(priv.room, 'Düellocu');
     for (let i = 0; i < 31; i++) priv.room.step(5000 + (i * 1000) / 30); // sim awake: sim time 1.0 s at room 6 s
     priv.room.onIntent(b, { k: 'yank', seq: 1, target: HERO_ID_BASE + 3, viewT: 6, hx: 0, hy: 0, hz: 0 });
     const got = priv.sim.intents[0];
     expect(got.i.k).toBe('yank');
     expect((got.i as { viewT: number }).viewT).toBeCloseTo(priv.sim.time, 6); // converted to sim seconds
-    // Debug hooks only with testHooks.
-    expect(priv.room.onDebug('spawn', [0, 1, 2, 3])).toBe(false);
+    expect(priv.room.onDebug(b, 'spawn', [0, 1, 2, 3])).toBe(false);
     const dbg = makeRoom({ testHooks: true });
-    expect(dbg.room.onDebug('killAll', [])).toBe(true);
-    expect(dbg.sim.debugCalls).toEqual([{ op: 'killAll', a: [] }]);
+    const d = admit(dbg.room, 'Testçi');
+    expect(dbg.room.onDebug(d, 'killAll', [])).toBe(true);
+    expect(dbg.room.onDebug(99, 'killAll', [])).toBe(false);
+    expect(dbg.sim.debugCalls).toEqual([{ pid: d, op: 'killAll', a: [] }]);
   });
 
   test('combat hook: events batched as ce (rej only to its player), snapshots at 15 Hz, sim sleeps when nobody is connected', () => {
@@ -678,6 +675,219 @@ test.describe('room', () => {
     const simT = sim.time;
     for (let i = 0; i < 30; i++) room.step(11_000 + (i * 1000) / 30);
     expect(sim.time).toBe(simT);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Combat rooms: Room + CombatRoomSim (M11's CombatSim behind the RoomSim hook)
+
+const STEP_MS = 1000 / 30;
+
+/** A ground arena centre (street level) to stand heroes and spawn enemies on. */
+function groundSpot(): { x: number; y: number; z: number } {
+  const a = map.spawns.arenas.find((r) => !r.roof && r.type === AR.INTERSECTION) ?? map.spawns.arenas.find((r) => !r.roof)!;
+  return { x: a.x, y: a.y, z: a.z };
+}
+
+function makeCombatRoom(opts: { pvp?: boolean; publicRoom?: boolean; seed?: number } = {}) {
+  const out = new Rec();
+  const csim = combatSimFactory(map, { seed: opts.seed ?? 7, pvp: !!opts.pvp && !opts.publicRoom, maxEnemies: 60 }) as CombatRoomSim;
+  let n = 0;
+  const room = new Room(
+    { id: 'combat', map, pvp: !!opts.pvp, maxPlayers: 16, publicRoom: opts.publicRoom ?? true, index: 1, testHooks: true, newToken: () => `c${++n}` },
+    out,
+    csim,
+    0,
+  );
+  let k = 0; // steps run
+  const nowMs = () => k * STEP_MS;
+  const step = (count = 1) => {
+    for (let i = 0; i < count; i++) {
+      k++;
+      room.step(nowMs());
+    }
+  };
+  const state = (pid: number, x: number, y: number, z: number, tp = 0) => room.onState(pid, sampleAt(x, y, z, nowMs(), tp), null, nowMs());
+  const events = (pid: number): CombatEvent[] => out.json(pid, 'ce').flatMap((m) => (m as { ev: CombatEvent[] }).ev);
+  return { room, out, csim, step, state, events, nowS: () => nowMs() / 1000 };
+}
+
+test.describe('combat room (CombatSim)', () => {
+  test('strikes: in range hits, too fast → rate, out of range → range, stale → time; enemies hurt heroes', () => {
+    const c = makeCombatRoom();
+    const g = groundSpot();
+    const a = admit(c.room, 'Yumruk');
+    c.state(a, g.x, g.y, g.z);
+    c.step();
+    c.room.onDebug(a, 'spawn', [0, g.x + 1.2, g.y, g.z]);
+    c.room.onDebug(a, 'spawn', [0, g.x + 25, g.y, g.z]);
+    c.step();
+    const spawns = c.events(a).filter((e) => e.e === 'spawn') as Array<{ id: number; x: number }>;
+    expect(spawns.length).toBe(2);
+    const near = spawns.find((e) => e.x < g.x + 5)!.id;
+    const far = spawns.find((e) => e.x > g.x + 5)!.id;
+    const strike = (seq: number, target: number, viewT: number) =>
+      c.room.onIntent(a, { k: 'strike', seq, target, move: 0, viewT, hx: g.x, hy: g.y, hz: g.z });
+    c.state(a, g.x, g.y, g.z);
+    strike(1, near, c.nowS() - 0.1);
+    strike(2, near, c.nowS() - 0.08); // 20 ms later: faster than minStrikeInterval
+    strike(4, near, c.nowS() - 3); // far in the past
+    c.step();
+    c.state(a, g.x, g.y, g.z);
+    c.step(8); // past minStrikeInterval
+    c.state(a, g.x, g.y, g.z);
+    strike(3, far, c.nowS() - 0.05); // 25 m away
+    c.step();
+    const ev = c.events(a);
+    const hit = ev.find((e) => e.e === 'hit' && e.src === HERO_ID_BASE + a);
+    expect(hit, JSON.stringify(ev)).toMatchObject({ tgt: near, move: 0 });
+    const rej = Object.fromEntries(ev.filter((e) => e.e === 'rej').map((e) => [(e as { seq: number }).seq, (e as { why: string }).why]));
+    expect(rej).toEqual({ 2: 'rate', 3: 'range', 4: 'time' });
+    // The nearby thug fights back.
+    let hurt = false;
+    for (let i = 0; i < 30 * 6 && !hurt; i++) {
+      if (i % 3 === 0) c.state(a, g.x, g.y, g.z);
+      c.step();
+      hurt = c.events(a).some((e) => e.e === 'hit' && e.tgt === HERO_ID_BASE + a);
+    }
+    expect(hurt).toBe(true);
+    expect(c.csim.heroHp(a)).toBeLessThan(tuning.combat.maxHp);
+  });
+
+  test('down and respawn: the server respawn point is an accepted teleport, rejoin hp in welcome', () => {
+    const c = makeCombatRoom();
+    const g = groundSpot();
+    const a = admit(c.room, 'Düşen');
+    c.state(a, g.x, g.y, g.z);
+    c.step();
+    c.room.onDebug(a, 'setHp', [0]);
+    let resp: { x: number; y: number; z: number } | null = null;
+    for (let i = 0; i < 30 * (tuning.combat.downTime + 2) && !resp; i++) {
+      if (i % 3 === 0) c.state(a, g.x, g.y, g.z);
+      c.step();
+      resp = (c.events(a).find((e) => e.e === 'respawn') as { x: number; y: number; z: number } | undefined) ?? null;
+    }
+    expect(c.events(a).some((e) => e.e === 'down' && e.pid === a)).toBe(true);
+    expect(resp).not.toBeNull();
+    expect(Math.hypot(resp!.x - g.x, resp!.z - g.z)).toBeGreaterThan(tuning.combat.respawnRoofMin - 15); // a roof, not the street
+    const out = { x: 0, y: 0, z: 0 };
+    expect(c.csim.respawnPoint(a, out)).toBe(true);
+    expect(c.state(a, resp!.x, resp!.y, resp!.z, 1)).toBe(STATE_OK);
+    expect(c.out.json(a, 'correct')).toEqual([]);
+    expect(c.csim.heroHp(a)).toBe(tuning.combat.maxHp);
+    // Elsewhere far away with the counter bumped is still a cheat.
+    c.step();
+    expect(c.state(a, resp!.x + 300, resp!.y, resp!.z, 2)).toBe(STATE_CORRECTED);
+  });
+
+  test('PvP is CombatSim\'s rule: rejected in public rooms, allowed in private PvP rooms', () => {
+    for (const pvpRoom of [false, true]) {
+      const c = makeCombatRoom({ pvp: pvpRoom, publicRoom: !pvpRoom });
+      const g = groundSpot();
+      const a = admit(c.room, 'Saldıran');
+      const b = admit(c.room, 'Hedef');
+      c.state(a, g.x, g.y, g.z);
+      c.state(b, g.x + 1, g.y, g.z);
+      c.step(3);
+      c.state(a, g.x, g.y, g.z);
+      c.state(b, g.x + 1, g.y, g.z);
+      c.room.onIntent(a, { k: 'strike', seq: 5, target: HERO_ID_BASE + b, move: 0, viewT: c.nowS() - 0.05, hx: g.x, hy: g.y, hz: g.z });
+      c.step();
+      const ev = c.events(a);
+      if (pvpRoom) {
+        expect(ev.some((e) => e.e === 'rej'), JSON.stringify(ev)).toBe(false);
+        expect(ev.some((e) => e.e === 'hit' && e.tgt === HERO_ID_BASE + b)).toBe(true);
+        expect(c.csim.heroHp(b)).toBeLessThan(tuning.combat.maxHp);
+      } else {
+        expect(ev.filter((e) => e.e === 'rej')).toEqual([{ e: 'rej', pid: a, seq: 5, why: 'pvp' }]);
+        expect(c.events(b).some((e) => e.e === 'rej')).toBe(false); // only to the sender
+      }
+    }
+  });
+
+  test('snapshots: nearest first within the radius, into the preallocated array', () => {
+    const c = makeCombatRoom();
+    const g = groundSpot();
+    for (let i = 0; i < 45; i++) {
+      const ang = i * 2.399;
+      const r = 3 + i * 8;
+      c.csim.sim.debugSpawn(0, g.x + Math.cos(ang) * r, g.y + 5, g.z + Math.sin(ang) * r);
+    }
+    const out = Array.from({ length: 30 }, makeEnemySnap);
+    const before = out.slice();
+    const n = c.csim.snapshot(g.x, g.y, g.z, 300, out, 30);
+    expect(out.every((o, i) => o === before[i])).toBe(true);
+    const all = c.csim.sim.enemies.map((e) => Math.hypot(e.pos.x - g.x, e.pos.y - g.y, e.pos.z - g.z)).filter((d) => d <= 300).sort((p, q) => p - q);
+    expect(n).toBe(Math.min(30, all.length));
+    const got = out.slice(0, n).map((e) => Math.hypot(e.x - g.x, e.y - g.y, e.z - g.z));
+    for (let i = 0; i < n; i++) expect(got[i]).toBeCloseTo(all[i], 6);
+    expect(out[0]).toMatchObject({ kind: 0, hp: 1, target: 0 });
+    expect(c.csim.snapshot(g.x, g.y, g.z, 1, out, 30)).toBe(0);
+  });
+
+  test('parity: Room + CombatRoomSim over the wire format and a bare CombatSim give the same hash', () => {
+    const g = groundSpot();
+    const seed = 4242;
+    const q = (v: number) => Math.round(v * 16) / 16; // exactly representable after f32 / JSON
+    const script = (k: number, pid: number) => {
+      const t = k * 0.03 + pid;
+      return { x: q(g.x + Math.cos(t) * 3), y: g.y, z: q(g.z + Math.sin(t) * 3), vx: q(Math.cos(t) * 2), vz: q(Math.sin(t) * 2) };
+    };
+    const STEPS = 450;
+    // (a) through the Room: encoded states, JSON intents, debug hooks.
+    const c = makeCombatRoom({ seed });
+    const pids = [admit(c.room, 'Bir'), admit(c.room, 'İki')];
+    // (b) a bare CombatSim with the same inputs.
+    const bare = new CombatSim(map.world, map.layout, map.spawns, seed, { pvp: false, maxEnemies: 60 });
+    const decoded = makeHeroSample();
+    const ceRoom: string[] = [];
+    const ceBare: string[] = [];
+    for (let k = 0; k < STEPS; k++) {
+      const nowMs = (k * 1000) / 30;
+      if (k % 3 === 0) {
+        for (const pid of pids) {
+          const p = script(k, pid);
+          const s = sampleAt(p.x, p.y, p.z, nowMs);
+          s.vx = p.vx;
+          s.vz = p.vz;
+          expect(decodeHeroState(encodeHeroState(s), decoded)).toBe(true);
+          // The bare sim gets exactly what came off the wire, with the Room's clock conversion.
+          const d = decoded;
+          bare.upsertHero({ pid, x: d.x, y: d.y, z: d.z, vx: d.vx, vy: d.vy, vz: d.vz, mode: d.mode, grounded: true, facing: d.facing, afk: false, t: c.room.toSim(Math.round(nowMs) / 1000) });
+          c.room.onState(pid, decoded, null, nowMs);
+        }
+      }
+      if (k === 3) {
+        for (let i = 0; i < 6; i++) {
+          const args = [i % 2, g.x + 4 + i, g.y, g.z - 3 + i];
+          const msg = parseClientMsg(JSON.stringify({ t: 'dbg', op: 'spawn', a: args }));
+          if (!msg || msg.t !== 'dbg') throw new Error('dbg');
+          c.room.onDebug(pids[0], msg.op, msg.a);
+          bare.debugSpawn(args[0] as 0, args[1], args[2], args[3]);
+        }
+      }
+      if (k > 6 && k % 10 === 0) {
+        for (const pid of pids) {
+          const p = script(k - k % 3, pid);
+          const i = { k: 'strike', seq: k, target: 1 + ((k / 10) % 6), move: 0, viewT: nowMs / 1000 - 0.1, hx: p.x, hy: p.y, hz: p.z } as const;
+          const msg = parseClientMsg(JSON.stringify({ t: 'act', i }));
+          if (!msg || msg.t !== 'act') throw new Error('act');
+          c.room.onIntent(pid, msg.i);
+          bare.intent(pid, { ...i, viewT: c.room.toSim(i.viewT) }); // the Room's clock conversion (offset ≈ 0 here)
+        }
+      }
+      c.room.step(((k + 1) * 1000) / 30);
+      bare.step();
+      const evs: CombatEvent[] = [];
+      bare.drainEvents(evs);
+      for (const e of evs) ceBare.push(e.e);
+    }
+    for (const m of c.out.msgs) if (m.pid === pids[0] && !(m.m instanceof Uint8Array) && m.m.t === 'ce') for (const e of m.m.ev) ceRoom.push(e.e);
+    expect(c.csim.sim.steps).toBe(STEPS);
+    expect(c.csim.hash()).toBe(bare.hash());
+    expect(ceBare.filter((e) => e === 'hit').length).toBeGreaterThan(3);
+    // Same event stream (the Room sends 'rej' only to its owner, so compare without them).
+    expect(ceRoom.filter((e) => e !== 'rej')).toEqual(ceBare.filter((e) => e !== 'rej'));
   });
 });
 
@@ -932,7 +1142,7 @@ test('static paths cannot escape the root', () => {
 // Purity of the shared modules (they run in the browser, in Node and in LocalLink)
 
 test('shared net/sim modules import only pure code and no DOM or Node APIs', () => {
-  const allowed = [/^three$/, /^src\/config\/tuning\.ts$/, /^src\/core\/(math|rng)\.ts$/, /^src\/physics\/[a-zA-Z]+\.ts$/, /^src\/world\/(types|cityGen|cityCollision)\.ts$/, /^src\/net\/(protocol|codec|names|maps|clock|interp)\.ts$/, /^src\/sim\/[a-zA-Z]+\.ts$/];
+  const allowed = [/^three$/, /^src\/combat\/(?!render\/|client\/)[a-zA-Z/]+\.ts$/, /^src\/config\/tuning\.ts$/, /^src\/core\/(math|rng)\.ts$/, /^src\/physics\/[a-zA-Z]+\.ts$/, /^src\/world\/(types|cityGen|cityCollision)\.ts$/, /^src\/net\/(protocol|codec|names|maps|clock|interp)\.ts$/, /^src\/sim\/[a-zA-Z]+\.ts$/];
   const roots = ['protocol', 'codec', 'names', 'maps', 'clock', 'interp'].map((n) => `src/net/${n}.ts`).concat(fs.readdirSync(path.join(ROOT, 'src/sim')).map((f) => `src/sim/${f}`));
   const seen = new Set<string>();
   const queue = [...roots];

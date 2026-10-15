@@ -29,7 +29,6 @@ import {
 } from '../net/protocol';
 import { SIM_DT, SIM_HZ } from './nullSim';
 import {
-  HERO_ID_BASE,
   makeEnemySnap,
   type CombatEvent,
   type CombatIntent,
@@ -322,7 +321,9 @@ export class Room {
 
   setRtt(pid: number, rttMs: number): void {
     const s = this.players.get(pid);
-    if (s && Number.isFinite(rttMs)) s.rtt = Math.max(0, rttMs);
+    if (!s || !Number.isFinite(rttMs)) return;
+    s.rtt = Math.max(0, rttMs);
+    this.sim.setRtt(pid, s.rtt / 1000);
   }
 
   // -------------------------------------------------------------------------
@@ -435,17 +436,14 @@ export class Room {
   onIntent(pid: number, i: CombatIntent): void {
     const slot = this.players.get(pid);
     if (!slot || !slot.connected) return;
-    if (i.k !== 'dodge' && i.target >= HERO_ID_BASE && !this.pvp) {
-      this.out.send(pid, { t: 'ce', ev: [{ e: 'rej', pid, seq: i.seq, why: 'pvp' }] });
-      return;
-    }
+    // Validation (range, rate, time, state, PvP) is the sim's own: one set of rules for SP and the server.
     this.sim.intent(pid, i.k === 'dodge' ? { ...i, t: this.toSim(i.t) } : { ...i, viewT: this.toSim(i.viewT) });
   }
 
-  /** `dbg` test hooks; ignored unless the room was created with testHooks. */
-  onDebug(op: DebugOp, a: readonly number[]): boolean {
-    if (!this.cfg.testHooks) return false;
-    this.sim.debug(op, a);
+  /** `dbg` test hooks from player `pid`; ignored unless the room was created with testHooks. */
+  onDebug(pid: number, op: DebugOp, a: readonly number[]): boolean {
+    if (!this.cfg.testHooks || !this.players.has(pid)) return false;
+    this.sim.debug(pid, op, a);
     return true;
   }
 

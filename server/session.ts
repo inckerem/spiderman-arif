@@ -143,7 +143,7 @@ export class Session implements Peer {
         return;
       case 'dbg':
         if (!this.otherBucket.take(now)) return this.overLimit(now);
-        this.mr.room.onDebug(m.op, m.a);
+        this.mr.room.onDebug(this.pid, m.op, m.a);
         return;
       case 'leave': {
         const mr = this.mr;

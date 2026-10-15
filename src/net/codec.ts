@@ -28,7 +28,7 @@ import {
   type ServerMsg,
 } from './protocol';
 import { isMapId } from './maps';
-import type { CombatIntent, DebugOp, EnemySnap } from '../sim/types';
+import { DEBUG_OPS, type CombatIntent, type EnemySnap } from '../sim/types';
 
 const TAU = Math.PI * 2;
 const ENEMY_BYTES = 18;
@@ -508,7 +508,6 @@ const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFin
 const isInt = (v: unknown, lo: number, hi: number): v is number => isNum(v) && Number.isInteger(v) && v >= lo && v <= hi;
 const isStr = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max;
 
-const DEBUG_OPS: readonly DebugOp[] = ['spawn', 'event', 'killAll'];
 const AIM_KINDS = ['yank', 'pin', 'takedown'] as const;
 
 function parseIntent(v: unknown): CombatIntent | null {

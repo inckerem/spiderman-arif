@@ -6,8 +6,9 @@
 import { randomInt } from 'node:crypto';
 import { MAPS, type MapId } from '../src/net/maps';
 import { isRoomCode, makeRoomCode, normalizeRoomCode, PROTOCOL_VERSION, type ClientMsg, type KickWhy, type LeftWhy, type RejectWhy, type ServerMsg } from '../src/net/protocol';
-import { buildMapRuntime } from '../src/sim/mapRuntime';
-import { nullSimFactory } from '../src/sim/nullSim';
+import { buildMapRuntime } from './mapRuntime';
+import { combatSimFactory } from '../src/sim/combatRoomSim';
+import { tuning } from '../src/config/tuning';
 import { Room } from '../src/sim/room';
 import type { MapRuntime, RoomSimFactory } from '../src/sim/types';
 import { silentLog, type Log } from './log';
@@ -35,11 +36,11 @@ export interface RoomManagerOptions {
   privateRoomIdleS: number;
   reconnectGraceS: number;
   testHooks: boolean;
-  /** Combat hook per room (default NullSim: presence only, until M11). */
+  /** Combat hook per room (default: CombatSim through CombatRoomSim; NullSim for presence-only tests). */
   simFactory?: RoomSimFactory;
   /** Integer in [0, n); default crypto.randomInt. */
   randInt?: (n: number) => number;
-  /** Max enemies per room handed to the sim factory. */
+  /** Max enemies per room handed to the sim factory (default tuning.events.maxEnemiesMp). */
   maxEnemies?: number;
   log?: Log;
 }
@@ -58,14 +59,18 @@ export class RoomManager {
   private readonly log: Log;
 
   constructor(readonly opts: RoomManagerOptions) {
-    this.simFactory = opts.simFactory ?? nullSimFactory;
+    this.simFactory = opts.simFactory ?? combatSimFactory;
     this.randInt = opts.randInt ?? ((n) => randomInt(n));
     this.log = opts.log ?? silentLog;
   }
 
   /** Builds every map's runtime (city + collision world); call once at start. */
   prepareMaps(): void {
-    for (const id of Object.keys(MAPS) as MapId[]) this.mapRuntime(id);
+    for (const id of Object.keys(MAPS) as MapId[]) {
+      const t0 = performance.now();
+      const rt = this.mapRuntime(id);
+      this.log.info('map ready', { map: id, ms: Math.round(performance.now() - t0), arenas: rt.spawns.arenas.length, loops: rt.spawns.loops.length });
+    }
   }
 
   private mapRuntime(id: MapId): MapRuntime {
@@ -92,7 +97,7 @@ export class RoomManager {
     const id = publicRoom ? `${map}#${index}` : `${map}:${code}`;
     const peers = new Map<number, Peer>();
     const rt = this.mapRuntime(map);
-    const sim = this.simFactory(rt, { seed: this.randInt(0x7fffffff), pvp: pvp && !publicRoom, maxEnemies: this.opts.maxEnemies ?? 60 });
+    const sim = this.simFactory(rt, { seed: this.randInt(0x7fffffff), pvp: pvp && !publicRoom, maxEnemies: this.opts.maxEnemies ?? tuning.events.maxEnemiesMp });
     const room = new Room(
       {
         id,

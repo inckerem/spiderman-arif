@@ -42,7 +42,7 @@ Behind the main menu the hero swings through the city on autopilot, filmed by a 
 
 ### Multiplayer server (development)
 
-Multiplayer (M12) runs on a small Node.js game server in `server/` that shares the protocol and room code in `src/net/` and `src/sim/` with the client. The server and its rooms are in place; the in-game multiplayer menu and remote heroes come in a later step, so the game itself still plays single player.
+Multiplayer (M12) runs on a small Node.js game server in `server/` that shares the protocol and room code in `src/net/` and `src/sim/` with the client. The server, its rooms and the server-side combat (the same combat simulation as single player) are in place; the in-game multiplayer menu and remote heroes come in a later step, so the game itself still plays single player.
 
 ```bash
 npm run server:test  # builds dist-server/server.mjs and runs it on 127.0.0.1:8787 (no static files, test hooks on)
@@ -82,6 +82,7 @@ The game also works under a path instead of a subdomain (asset paths are relativ
 | `TRUST_PROXY` | `0` (`1` in compose) | Take the client address from the last `X-Forwarded-For` hop; set it only behind your own proxy |
 | `ALLOWED_ORIGINS` | empty (any) | Comma-separated origins allowed to open the WebSocket, e.g. `https://oyun.example.com` |
 | `TEST_HOOKS` | `0` | Accept test-only debug messages; never on a public server |
+| `SIM` | `combat` | Room simulation: `combat` (enemies, health and hits) or `null` (presence only, for tests) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` or `silent` |
 
 ## Controls

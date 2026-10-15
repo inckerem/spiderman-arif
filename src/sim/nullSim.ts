@@ -1,7 +1,8 @@
 /**
- * The RoomSim used until M11's CombatSim exists (and by rooms that want
- * presence only): it keeps time and the latest hero states, has no enemies,
- * produces no events and never damages anyone. PURE.
+ * A presence-only RoomSim (server SIM=null, and tests of the Room itself):
+ * it keeps time and the latest hero states, has no enemies and never damages
+ * anyone. Every targeted intent is rejected with `state` (there is nothing to
+ * hit); the real rules live in CombatSim (`combatRoomSim.ts`). PURE.
  */
 import type { CombatEvent, CombatIntent, CrimeEventInfo, DebugOp, EnemySnap, HeroState, RoomSim } from './types';
 
@@ -14,7 +15,9 @@ export class NullSim implements RoomSim {
   readonly heroes = new Map<number, HeroState>();
   /** Intents received (tests read them). */
   readonly intents: Array<{ pid: number; i: CombatIntent }> = [];
-  readonly debugCalls: Array<{ op: DebugOp; a: readonly number[] }> = [];
+  readonly debugCalls: Array<{ pid: number; op: DebugOp; a: readonly number[] }> = [];
+  readonly rtts = new Map<number, number>();
+  private readonly out: CombatEvent[] = [];
 
   upsertHero(s: HeroState): void {
     const h = this.heroes.get(s.pid);
@@ -28,13 +31,17 @@ export class NullSim implements RoomSim {
 
   intent(pid: number, i: CombatIntent): void {
     if (this.intents.length < 256) this.intents.push({ pid, i });
+    if (i.k !== 'dodge') this.out.push({ e: 'rej', pid, seq: i.seq, why: 'state' });
   }
 
   step(): void {
     this.time += SIM_DT;
   }
 
-  drainEvents(_out: CombatEvent[]): void {}
+  drainEvents(out: CombatEvent[]): void {
+    for (const e of this.out) out.push(e);
+    this.out.length = 0;
+  }
 
   snapshot(_x: number, _y: number, _z: number, _radius: number, _out: EnemySnap[], _max: number): number {
     return 0;
@@ -50,8 +57,16 @@ export class NullSim implements RoomSim {
     return false;
   }
 
-  debug(op: DebugOp, a: readonly number[]): void {
-    this.debugCalls.push({ op, a: a.slice() });
+  debug(pid: number, op: DebugOp, a: readonly number[]): void {
+    this.debugCalls.push({ pid, op, a: a.slice() });
+  }
+
+  setRtt(pid: number, rttS: number): void {
+    this.rtts.set(pid, rttS);
+  }
+
+  enemyCount(): number {
+    return 0;
   }
 }
 

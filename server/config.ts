@@ -23,6 +23,8 @@ export interface ServerConfig {
   allowedOrigins: string[];
   /** Accept `dbg` messages (tests only). */
   testHooks: boolean;
+  /** Room simulation: `combat` (CombatSim, default) or `null` (presence only, for tests). */
+  sim: 'combat' | 'null';
   logLevel: LogLevel;
 }
 
@@ -57,6 +59,12 @@ function bool(env: Record<string, string | undefined>, key: string, def: boolean
   throw new Error(`${key} must be 0 or 1 (got "${raw}")`);
 }
 
+function simKind(raw: string | undefined): 'combat' | 'null' {
+  if (raw === undefined || raw === '' || raw === 'combat') return 'combat';
+  if (raw === 'null') return 'null';
+  throw new Error(`SIM must be combat or null (got "${raw}")`);
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env, argv: readonly string[] = process.argv.slice(2)): ServerConfig {
   const e = { ...env, ...argsToEnv(argv) };
   const level = (e.LOG_LEVEL || 'info').toLowerCase() as LogLevel;
@@ -77,6 +85,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       .map((s) => s.trim().replace(/\/+$/, ''))
       .filter(Boolean),
     testHooks: bool(e, 'TEST_HOOKS', false),
+    sim: simKind(e.SIM),
     logLevel: level,
   };
 }
