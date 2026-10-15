@@ -247,6 +247,26 @@ export const tr = {
     musicMissing: 'Müzik dosyası bulunamadı; oyun müziksiz devam ediyor.',
     bootFailed: 'Oyun başlatılamadı. Sayfayı yenileyin; sorun sürerse bu site için kayıtlı tarayıcı verilerini silin.',
   },
+  /** Combat (M11): enemy and event names, keyed like `combat/roster.ts` (`ROSTER[kind].key`) and `CrimeEventInfo.type`. */
+  combat: {
+    enemies: {
+      thug: 'Serseri',
+      bat: 'Sopalı',
+      gunman: 'Tetikçi',
+      brute: 'Zırhlı',
+      drone: 'Dron',
+      kocbasi: 'Koçbaşı',
+      kuzgun: 'Kuzgun',
+      diken: 'Diken',
+    },
+    events: {
+      robbery: 'Soygun',
+      gang: 'Çete kavgası',
+      drones: 'Dron saldırısı',
+      /** Boss sighting: the boss name goes in place of {name}. */
+      boss: '{name} görüldü',
+    },
+  },
   /** Fictional in-world signage (world art, kept here with all other text). */
   signs: [
     'KUZEY ÇAY',
