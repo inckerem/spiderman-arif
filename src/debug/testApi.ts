@@ -29,6 +29,7 @@ import {
   momentState,
   type BotInput,
 } from './testDrivers';
+import { goldenDigest } from './golden';
 
 declare global {
   interface Window {
@@ -167,6 +168,8 @@ export function installTestApi(game: Game, app?: App): void {
     /** Frames of play with the held input (the app's per-frame update drives the rooftop moment). */
     momentFrames: (seconds: number, sample = 0) => (app ? momentFrames(game, app, held, prev, seconds, sample) : null),
     updateLife: (dt = 1 / 60) => game.updateLife(dt),
+    /** Hash of layout, colliders and deterministic driver outputs (M13 refactor gate). */
+    goldenDigest: (attractSeconds = 120) => goldenDigest(game, attractSeconds),
     simTiming(): { msPerTick: number; ticks: number } {
       return { msPerTick: game.simTimeMs / Math.max(1, game.simTicksMeasured), ticks: game.simTicksMeasured };
     },
