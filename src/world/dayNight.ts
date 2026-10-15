@@ -95,7 +95,9 @@ export class DayNight {
     // Sun path: rises in the east (+X), sets in the west, leaning south (+Z).
     const dayFrac = (h - 6) / 12; // 0 at sunrise, 1 at sunset
     const elev = Math.sin(dayFrac * Math.PI) * (68 * Math.PI) / 180;
-    const az = Math.PI * dayFrac; // 0 east -> pi west
+    // 0 east -> pi west, turned a little so the noon sun never lights east and
+    // west walls exactly edge-on (they would sit on a toon band edge and flicker).
+    const az = Math.PI * dayFrac + 0.1;
     this.sunDir.set(Math.cos(az) * Math.cos(elev), Math.sin(elev), 0.42 * Math.cos(elev) + 0.15).normalize();
     if (h < 6 || h > 18) {
       // Below the horizon: mirror path.

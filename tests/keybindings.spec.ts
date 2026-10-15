@@ -6,7 +6,8 @@ import { expectClean, saveResult } from './helpers';
 // are refused, the capturing press never clicks the button under it, arrow
 // keys move between slots), the controls screen and the photo panel follow
 // the bindings, the game reacts to the new keys only, bindings persist, a
-// corrupt entry is sanitized, and both reset buttons do what they say.
+// corrupt entry is sanitized (including codes named like Object.prototype
+// members, which once hung the boot), and both reset buttons do what they say.
 
 /** Collects console errors and warnings for the whole test, across reloads. */
 function watchConsole(page: Page): string[] {
@@ -231,6 +232,22 @@ test('i. key bindings: rebinding, conflicts, persistence and gameplay', async ({
   expect(clean.music).toEqual([null, null]);
   expect(clean.photo).toEqual([null, 'KeyP']);
   expect(clean.left).toEqual(['KeyA', 'ArrowLeft']);
+  // Codes named like Object.prototype members read as empty, and captions never
+  // find inherited members (such a code used to hang the boot on the loading screen).
+  await page.evaluate(() =>
+    localStorage.setItem('skythread.settings.v1', JSON.stringify({ bindings: { jump: ['toString', null], zip: ['constructor', 'Mouse2'] } })),
+  );
+  await load(page, true);
+  const proto = await bindings(page);
+  expect(proto.jump).toEqual([null, null]);
+  expect(proto.zip).toEqual([null, 'Mouse2']);
+  await expect(page.getByRole('button', { name: 'Oyna' })).toBeVisible();
+  const captions = await page.evaluate(async () => {
+    const path = '/src/ui/keyLabels.ts';
+    const { keyLabel } = await import(/* @vite-ignore */ path);
+    return [keyLabel('toString'), keyLabel('constructor'), keyLabel('NumpadtoString')];
+  });
+  expect(captions).toEqual(['toString', 'constructor', 'Num toString']);
 
   // --- The bindings reset restores every default -----------------------------------------
   await openBindings(page);

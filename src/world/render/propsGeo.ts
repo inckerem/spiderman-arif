@@ -167,7 +167,8 @@ export function addStreetProp(p: StreetProp, P: GeomBuilder, G: GeomBuilder): vo
       P.setColor(0.66, 0.64, 0.6);
       P.cylinder(p.x, p.z, p.y, p.y + 0.75, 3.2, 3.2, 20);
       P.setColor(0.36, 0.62, 0.78);
-      P.cylinder(p.x, p.z, p.y + 0.6, p.y + 0.76, 2.9, 2.9, 20, true);
+      // Water stands 5 cm above the rim cap (1 cm z-fought at a distance).
+      P.cylinder(p.x, p.z, p.y + 0.6, p.y + 0.8, 2.9, 2.9, 20, true);
       P.setColor(0.66, 0.64, 0.6);
       P.cylinder(p.x, p.z, p.y + 0.75, p.y + 2.2, 0.6, 0.45, 12);
       P.cylinder(p.x, p.z, p.y + 2.2, p.y + 2.6, 1.3, 1.5, 14);

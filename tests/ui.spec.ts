@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { expectClean, saveResult } from './helpers';
+import { expectClean, openGame, saveResult } from './helpers';
 
 // (g) Shell: settings round-trip through the real settings screen and
 // localStorage (including a corrupt entry), the costume picker, the audio
@@ -182,5 +182,25 @@ test('g. settings persist, audio decodes, pause/resume and photo export work', a
   const result = { applied: want, reloadedOk: true, audio, musicRms, voices, photo: { name, bytes: bytes.length } };
   saveResult('g-ui', result);
   console.log('g. ui', JSON.stringify(result));
+  expectClean(problems);
+});
+
+// (g2) Dynamic resolution follows the render cost, not the frame interval: on a
+// vsync-locked 60 Hz display a load spike lowers the scale to its 0.75 floor,
+// and it returns to full resolution once the cost drops, without hunting.
+test('g2. dynamic resolution recovers at 60 Hz', async ({ page }) => {
+  const problems = await openGame(page);
+  const r = await page.evaluate(() => (window as any).__game.dynResTest());
+  saveResult('g2-dynres', r);
+  console.log('g2. dynres', JSON.stringify(r));
+  expect(r.start).toBe(1);
+  expect(r.afterSpike).toBeCloseTo(0.75, 5);
+  expect(r.recovered).toBe(1);
+  expect(r.recoverSeconds).toBeLessThan(6);
+  expect(r.bandChanges).toBe(0);
+  expect(r.gpuBoundScale).toBeLessThan(1);
+  expect(r.gpuBoundScale).toBeGreaterThanOrEqual(0.75);
+  expect(r.gpuBoundChanges).toBe(0);
+  expect(r.end).toBe(1);
   expectClean(problems);
 });

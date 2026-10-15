@@ -10,7 +10,7 @@ import {
 } from 'three';
 import { QUALITY, type QualityPreset } from './config/quality';
 import { PostFX } from './render/postfx';
-import { shared } from './render/materials';
+import { shared, stableShadowSampling } from './render/materials';
 import { buildCityVisuals, type CityVisuals } from './world/cityRender';
 import { Sky } from './world/sky';
 import { DayNight } from './world/dayNight';
@@ -105,6 +105,7 @@ export class Game {
   cameraOverride: { x: number; y: number; z: number; tx: number; ty: number; tz: number; fov: number } | null = null;
 
   constructor(private readonly opts: GameOptions) {
+    stableShadowSampling();
     this.renderer = new WebGLRenderer({ canvas: opts.canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.quality.pixelRatioCap));
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -162,7 +163,7 @@ export class Game {
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.6;
-    this.sun.shadow.radius = 2.2;
+    this.sun.shadow.radius = 1;
     this.scene.add(this.sun, this.sun.target);
     this.hemi = new HemisphereLight(0xc4e0ff, 0x8a7a66, 0.85);
     this.scene.add(this.hemi);
@@ -377,7 +378,7 @@ export class Game {
       dt = 0;
     }
     this.renderFrame(dt);
-    this.post.updateDynamic(this.loop.lastFrameMs);
+    this.post.updateDynamic(this.loop.lastWorkMs, this.loop.lastFrameMs);
     if (this.hudEl) {
       this.hudEl.style.display = this.debug.visible ? '' : 'none';
       if (this.debug.visible) {

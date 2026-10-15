@@ -91,7 +91,7 @@ Kinematic moves (zip, vault, mantle) go through the same resolver; if a kinemati
 - Arcade layer: reduced gravity while taut, tangential force from input toward the camera direction, gentle heading steering that preserves speed, soft speed cap with drag above 60 m/s, catch conversion (when the rope snaps taut, most of the removed radial speed is redirected tangentially so falling into a swing never stalls), automatic ground clearance (the rope reels in so the arc bottom stays above ground), hands alternate, good-release window on the rising part of the arc with a launch bonus and a visible cue.
 - Controls: pressing the left button fires a line at the crosshair target and the line holds while the button is down; while it is held with no usable point under the crosshair, the line fires as soon as one appears. Letting go (or Space) releases with a push forward and up (`cut.up`, `cut.forward` fading out at speed) that grows over the first `cut.fullAfter` seconds on the line, so a tap does not launch; a release inside the good-release window also gets the launch bonus. The right click starts the pull line, which eases in from `zip.startSpeed` to `zip.speed` and can be cut with Space the same way.
 - Attach latency: a fired line reaches the anchor in at most 60 ms, so a release followed by a new press is attached again in well under 150 ms.
-- Line of sight from the hand to the anchor is checked every tick; when blocked the rope releases gracefully (no automatic re-fire).
+- Line of sight from the hand to the anchor is checked every tick; when blocked the rope releases gracefully (no push). If the button is still held, the line fires again as soon as the crosshair finds a usable point, like any held press.
 
 ## 6. Targeting
 
@@ -104,7 +104,7 @@ Kinematic moves (zip, vault, mantle) go through the same resolver; if a kinemati
 
 - Cel shading: `MeshToonMaterial` with a 3-band gradient map, patched via `onBeforeCompile` for facade windows (shared window atlas texture plus per-window lit hash), wind sway (trees), and an extra MRT output with view-space normals.
 - Outlines: post-process edge detection on the depth buffer (Laplacian of inverse depth, which is zero on planes so flat surfaces never produce false edges) and the normal buffer (creases), with distance fade to prevent shimmer. Works with instancing at no extra draw calls.
-- Pipeline: shadow map (one directional light, texel-snapped around the player) → MRT scene pass (color, normal, depth) → composite pass (outlines, speed lines, grading) → FXAA → screen. Render scale and dynamic resolution resize the internal targets.
+- Pipeline: shadow map (one directional light, texel-snapped around the player) → MRT scene pass (color, normal, depth) → composite pass (outlines, speed lines, grading) → FXAA → screen. Render scale and dynamic resolution resize the internal targets; a smaller internal image is upscaled with bilinear filtering (by the FXAA pass, or a plain copy pass without FXAA).
 - Batching: facades, roof props, street props, signs and lamp bulbs are merged per 240 m chunk into one draw call (one shared cel material, per-vertex mode selects window/plain/emissive/sign shading); ground is merged likewise. Trees (near/far LOD), cars and pedestrians use `InstancedMesh`. The hero is one rigidly skinned mesh (one draw call). Chunks are frustum culled.
 - Day-night: time drives sun/moon direction, light colors, hemisphere ambient, fog, sky shader, window emission (per-window thresholds so lights come on gradually), street lamp emission and light pools.
 
@@ -118,7 +118,7 @@ Kinematic moves (zip, vault, mantle) go through the same resolver; if a kinemati
 | Cold load | < 10 s | city generation < 2 s, shaders compiled during loading |
 | Frame hitches | none > 40 ms | no allocation in hot loops, precompiled shaders, no runtime geometry rebuilds |
 
-Dynamic resolution lowers the internal render scale when the frame time exceeds the target and raises it back with hysteresis.
+Dynamic resolution follows the render cost, not the frame interval (which never drops below 16.7 ms on a vsync-locked 60 Hz display): the CPU time of each frame's simulation and rendering and, where `EXT_disjoint_timer_query_webgl2` exists, the GPU time of the passes. It lowers the internal render scale (floor 0.75) when the cost exceeds 90 % of the 16.7 ms budget and raises it back below 60 %, with hysteresis and a growing hold after raises that had to be undone.
 
 ## 9. Testing
 

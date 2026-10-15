@@ -971,6 +971,184 @@ export function lineControlsTest(game: Game): Record<string, number | boolean> {
 }
 
 /**
+ * Line edge cases through the real mouse handlers: held state cleared without
+ * a release (pause, lost lock or focus) lets go of the line; a click shorter
+ * than a tick still fires (and lets go next tick, a tap); Space while a line
+ * fired from the ground is in flight jumps and keeps the line.
+ */
+export function lineEdgeCasesTest(game: Game): Record<string, number | boolean> {
+  const pl = game.player;
+  const input = game.input;
+  const canvas = game.renderer.domElement;
+  const route = cityRoute(game);
+  const out = new Vector3();
+  pl.findSafeSpot(route[0]![0], 0.5, route[0]![1], out);
+  const a = makeAnchorResult();
+  const events = (from: number): string[] => game.eventLog.slice(from).map((e) => e.type);
+  const r: Record<string, number | boolean> = {};
+  const mouse = (type: 'mousedown' | 'mouseup'): void => {
+    (type === 'mousedown' ? canvas : window).dispatchEvent(new MouseEvent(type, { button: 0 }));
+  };
+  // Devices drive the ticks: the pointer counts as locked, no injected input.
+  const aimInAir = (): boolean => {
+    pl.teleport(out.x, out.y + 24, out.z, 0, 0, -18);
+    game.rig.setLook(0, 0.35);
+    game.snapCamera();
+    if (!planTarget(game, 0, a)) return false;
+    aimAt(game, a.x, a.y, a.z);
+    return true;
+  };
+  game.injectInput = null;
+  input.clearAll();
+  input.enabled = true;
+  input.pointerLocked = true;
+  // 1. Held line, then held state cleared without a release edge (pause).
+  r.clearPlanned = aimInAir();
+  mouse('mousedown');
+  for (let i = 0; i < 40; i++) game.manualTick();
+  r.attachedBeforeClear = pl.rope.attached;
+  input.clearAll();
+  let e0 = game.eventLog.length;
+  game.manualTick();
+  r.releasedAfterClear = pl.mode !== MODE_SWING && events(e0).includes('release');
+  for (let i = 0; i < 20; i++) game.manualTick();
+  r.refiredAfterClear = events(e0).includes('webFire');
+  mouse('mouseup');
+  // 2. The same after the window loses focus.
+  aimInAir();
+  mouse('mousedown');
+  for (let i = 0; i < 40; i++) game.manualTick();
+  r.attachedBeforeBlur = pl.rope.attached;
+  window.dispatchEvent(new Event('blur'));
+  e0 = game.eventLog.length;
+  game.manualTick();
+  r.releasedAfterBlur = pl.mode !== MODE_SWING;
+  mouse('mouseup');
+  // 3. Press and release between two ticks: the line fires, then lets go as a tap.
+  r.tapPlanned = aimInAir();
+  e0 = game.eventLog.length;
+  mouse('mousedown');
+  mouse('mouseup');
+  game.manualTick();
+  r.subFrameFired = events(e0).includes('webFire');
+  const vy = pl.vel.y;
+  game.manualTick();
+  r.subFrameLetGo = pl.mode !== MODE_SWING;
+  r.subFrameLift = pl.vel.y - vy;
+  input.clearAll();
+  input.enabled = false;
+  input.pointerLocked = false;
+  // 4. Space while a line fired from the ground is in flight: jump, keep the line.
+  const inp = emptyBotInput();
+  const prev = emptyBotInput();
+  const step = (): void => stepWithInput(game, inp, prev);
+  pl.teleport(out.x, out.y, out.z);
+  for (let i = 0; i < 20; i++) step();
+  r.groundStart = pl.mode === MODE_GROUND;
+  let planned = false;
+  for (let k = 0; k < 16 && !planned; k++) {
+    game.rig.setLook((k * Math.PI) / 8, 0.45);
+    game.snapCamera();
+    planned = planTarget(game, 0, a) && Math.hypot(a.x - pl.pos.x, a.y - pl.pos.y, a.z - pl.pos.z) > 20;
+  }
+  r.groundPlanned = planned;
+  aimAt(game, a.x, a.y, a.z);
+  e0 = game.eventLog.length;
+  inp.swing = true;
+  step();
+  r.firedFromGround = pl.rope.firing && pl.rope.fromGround;
+  inp.jump = true;
+  step();
+  inp.jump = false;
+  r.jumpedInFlight = events(e0).includes('jump');
+  r.lineKeptAfterSpace = pl.mode === MODE_SWING;
+  for (let i = 0; i < 12 && !pl.rope.attached; i++) step();
+  r.attachedAfterSpace = pl.rope.attached;
+  inp.swing = false;
+  step();
+  return r;
+}
+
+/**
+ * Release tricks end on landing: a strong release starts a trick, the hero
+ * lands within the trick's time and jumps at once; the jump must not replay it.
+ */
+export function trickReplayTest(game: Game): Record<string, number | boolean> {
+  const pl = game.player;
+  const an = game.animator;
+  const S_RELEASE = 9;
+  const route = cityRoute(game);
+  const out = new Vector3();
+  pl.findSafeSpot(route[0]![0], 0.5, route[0]![1], out);
+  const inp = emptyBotInput();
+  const prev = emptyBotInput();
+  const step = (): void => stepWithInput(game, inp, prev);
+  pl.teleport(out.x, out.y, out.z);
+  for (let i = 0; i < 20; i++) step();
+  // Drop from 1 m with a good release (always a flip).
+  pl.teleport(out.x, out.y + 1, out.z);
+  an.onEvent({ type: 'release', good: true, broken: false, power: 1 });
+  step();
+  const trickStarted = an.state === S_RELEASE;
+  let landTicks = 0;
+  while (pl.mode !== MODE_GROUND && landTicks < 120) {
+    step();
+    landTicks++;
+  }
+  inp.jump = true;
+  step();
+  inp.jump = false;
+  let replayed = false;
+  for (let i = 0; i < 20; i++) {
+    step();
+    if (an.state === S_RELEASE) replayed = true;
+  }
+  return { trickStarted, landedMs: (landTicks * 1000) / 120, jumped: pl.airTime > 0 || pl.mode !== MODE_GROUND, replayed };
+}
+
+/**
+ * Dynamic resolution on a vsync-locked 60 Hz display (every frame 16.7 ms):
+ * a load spike lowers the scale to its floor, the scale returns to full once
+ * the render cost drops, a cost inside the hysteresis band changes nothing,
+ * and a GPU-bound cost that shrinks with the scale settles without hunting.
+ */
+export function dynResTest(game: Game): Record<string, number> {
+  const post = game.post;
+  const saved = { on: post.settings.dynamicResolution, max: post.settings.maxDynScale };
+  post.settings.dynamicResolution = true;
+  post.settings.maxDynScale = 1;
+  const frames = (cost: (scale: number) => number, seconds: number): number => {
+    let changes = 0;
+    for (let i = 0; i < seconds * 60; i++) {
+      const before = post.dynScale;
+      post.stepDynamic(cost(post.dynScale), 16.7);
+      if (post.dynScale !== before) changes++;
+    }
+    return changes;
+  };
+  // Settle first: a long calm period also clears any raise back-off from loading.
+  frames(() => 5, 25);
+  const start = post.dynScale;
+  frames(() => 25, 3);
+  const afterSpike = post.dynScale;
+  let recoverFrames = 0;
+  while (post.dynScale < 1 && recoverFrames < 60 * 30) {
+    post.stepDynamic(5, 16.7);
+    recoverFrames++;
+  }
+  const recovered = post.dynScale;
+  const bandChanges = frames(() => 12, 10);
+  frames((sc) => 20 * sc * sc, 20);
+  const gpuBoundChanges = frames((sc) => 20 * sc * sc, 20);
+  const gpuBoundScale = post.dynScale;
+  frames(() => 5, 30);
+  const end = post.dynScale;
+  post.settings.dynamicResolution = saved.on;
+  post.settings.maxDynScale = saved.max;
+  return { start, afterSpike, recoverSeconds: recoverFrames / 60, recovered, bandChanges, gpuBoundScale, gpuBoundChanges, end };
+}
+
+/**
  * Camera auto-follow: flying fast across the view with the mouse idle, the
  * yaw turns toward the travel direction; with the setting off it stays put.
  */

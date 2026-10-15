@@ -164,11 +164,18 @@ export function addBuildingGeometry(bld: Building, cb: ChunkBuilders, signRect: 
       f.setColorArr(roofCol);
       f.box(v.minX, v.minY, v.minZ, v.maxX, v.maxY, v.maxZ, 4);
     }
-    // Cornice band at the top of the volume.
+    // Cornice band at the top of the volume. Its top is only the outset ring:
+    // the roof (or the volume above) covers the footprint at the same height,
+    // and two faces there would z-fight into stripes.
     noWindows(f);
     f.setColorArr(trim);
     const o = CORNICE_OUT;
-    f.box(v.minX - o, v.maxY - CORNICE_H, v.minZ - o, v.maxX + o, v.maxY, v.maxZ + o, covered ? 1 | 2 | 8 | 16 | 32 : 63);
+    const cy = v.maxY - CORNICE_H;
+    f.box(v.minX - o, cy, v.minZ - o, v.maxX + o, v.maxY, v.maxZ + o, 1 | 2 | 8 | 16 | 32);
+    f.box(v.minX - o, cy, v.minZ - o, v.maxX + o, v.maxY, v.minZ, 4);
+    f.box(v.minX - o, cy, v.maxZ, v.maxX + o, v.maxY, v.maxZ + o, 4);
+    f.box(v.minX - o, cy, v.minZ, v.minX, v.maxY, v.maxZ, 4);
+    f.box(v.maxX, cy, v.minZ, v.maxX + o, v.maxY, v.maxZ, 4);
     // Pilasters at the corners (and along long faces when the style uses them).
     if (st.pilasters && v.maxY - v.minY > 6) {
       f.setColorArr(mulRGB(trim, 0.95));

@@ -96,10 +96,13 @@ export async function buildCityVisuals(L: CityLayout, onProgress?: (f: number) =
     const br = L.bridge;
     const c = getChunk(850, 0);
     const P = c.props;
+    // Deck top: walkways and road side by side at one height (never stacked, no z-fighting).
     P.setColor(0.6, 0.58, 0.55);
-    P.box(br.deck.minX, br.deck.minY, br.deck.minZ, br.deck.maxX, br.deck.maxY, br.deck.maxZ);
+    P.box(br.deck.minX, br.deck.minY, br.deck.minZ, br.deck.maxX, br.deck.maxY, br.deck.maxZ, 63 & ~4);
+    P.box(br.deck.minX, br.deck.minY, br.deck.minZ, br.deck.maxX, br.deck.maxY, br.deck.minZ + 1.2, 4);
+    P.box(br.deck.minX, br.deck.minY, br.deck.maxZ - 1.2, br.deck.maxX, br.deck.maxY, br.deck.maxZ, 4);
     P.setColor(0.3, 0.31, 0.33);
-    P.box(br.deck.minX, br.deck.maxY, br.deck.minZ + 1.2, br.deck.maxX, br.deck.maxY + 0.02, br.deck.maxZ - 1.2, 4);
+    P.box(br.deck.minX, br.deck.minY, br.deck.minZ + 1.2, br.deck.maxX, br.deck.maxY, br.deck.maxZ - 1.2, 4);
     P.setColor(0.86, 0.32, 0.22);
     P.box(br.deck.minX, br.deck.maxY, br.deck.minZ, br.deck.maxX, br.deck.maxY + 1.1, br.deck.minZ + 0.3);
     P.box(br.deck.minX, br.deck.maxY, br.deck.maxZ - 0.3, br.deck.maxX, br.deck.maxY + 1.1, br.deck.maxZ);

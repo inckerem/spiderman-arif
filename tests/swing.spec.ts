@@ -5,12 +5,14 @@ import { expectClean, openGame, saveResult } from './helpers';
 // chaining, the line controls (holding fires where the crosshair points and
 // keeps the line, letting go releases with a push, a tap gives none, Space
 // cuts, presses at open sky do nothing, the pull line eases in and Space cuts
-// it), and camera auto-follow.
+// it), camera auto-follow, and line edge cases (held state cleared without a
+// release lets go, a click shorter than a tick fires, Space while a line from
+// the ground is in flight jumps and keeps it).
 test('a. rope and swing behave as designed', async ({ page }) => {
   const problems = await openGame(page);
   const r = await page.evaluate(() => {
     const g = (window as any).__game;
-    return { noDrag: g.ropeTest(false), withDrag: g.ropeTest(true), catch: g.catchTest(), reattach: g.reattachLatency(), lines: g.lineControlsTest(), magnetismDeg: g.tuning.aim.magnetismDeg, follow: g.cameraFollowTest() };
+    return { noDrag: g.ropeTest(false), withDrag: g.ropeTest(true), catch: g.catchTest(), reattach: g.reattachLatency(), lines: g.lineControlsTest(), magnetismDeg: g.tuning.aim.magnetismDeg, follow: g.cameraFollowTest(), edges: g.lineEdgeCasesTest() };
   });
   saveResult('a-swing', r);
   console.log('a. swing', JSON.stringify(r, null, 1));
@@ -59,5 +61,23 @@ test('a. rope and swing behave as designed', async ({ page }) => {
   // Camera auto-follow turns toward the travel direction (and stays put when switched off).
   expect(r.follow.afterTwoSecondsOn).toBeLessThan(40);
   expect(r.follow.afterTwoSecondsOff).toBeGreaterThan(85);
+  // Line edge cases.
+  const e = r.edges;
+  expect(e.clearPlanned).toBe(true);
+  expect(e.attachedBeforeClear).toBe(true);
+  expect(e.releasedAfterClear).toBe(true);
+  expect(e.refiredAfterClear).toBe(false);
+  expect(e.attachedBeforeBlur).toBe(true);
+  expect(e.releasedAfterBlur).toBe(true);
+  expect(e.tapPlanned).toBe(true);
+  expect(e.subFrameFired).toBe(true);
+  expect(e.subFrameLetGo).toBe(true);
+  expect(e.subFrameLift).toBeLessThan(1);
+  expect(e.groundStart).toBe(true);
+  expect(e.groundPlanned).toBe(true);
+  expect(e.firedFromGround).toBe(true);
+  expect(e.jumpedInFlight).toBe(true);
+  expect(e.lineKeptAfterSpace).toBe(true);
+  expect(e.attachedAfterSpace).toBe(true);
   expectClean(problems);
 });

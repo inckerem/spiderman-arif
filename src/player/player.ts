@@ -66,6 +66,8 @@ interface RopeState {
   losBlocked: number;
   groundTime: number;
   fromGround: boolean;
+  /** Fired by the swing button: the line lasts only while the button is held. */
+  byButton: boolean;
 }
 
 interface ZipState {
@@ -215,6 +217,7 @@ export class Player {
       losBlocked: 0,
       groundTime: 0,
       fromGround: false,
+      byButton: false,
     };
     this.zip = {
       tx: 0,
@@ -313,15 +316,25 @@ export class Player {
 
     // Swing line: hold the left button to swing. It fires where the crosshair
     // points on the press, or as soon as the crosshair finds a point while
-    // held; letting go releases the line with a push. Space also cuts a line
-    // (the held button then waits for a new press). The right click starts a
-    // pull line, which Space cuts.
+    // held; letting go releases the line with a push. A line fired by the
+    // button ends whenever the button is up, so held state cleared without a
+    // release edge (pause, lost focus) never leaves it attached, and a click
+    // shorter than a tick still fires (and lets go on the next tick, a tap).
+    // Space also cuts a line (the held button then waits for a new press),
+    // except while a line fired from the ground is still in flight: then it
+    // jumps and the line keeps flying. The right click starts a pull line,
+    // which Space cuts.
     if (inp.swingPressed) this.holdSwing = true;
-    if (!inp.swing) this.holdSwing = false;
-    if (inp.jumpPressed && (this.mode === MODE_SWING || this.mode === MODE_ZIP)) {
+    else if (!inp.swing) this.holdSwing = false;
+    const flightFromGround = this.mode === MODE_SWING && this.rope.firing && this.rope.fromGround;
+    if (inp.jumpPressed && flightFromGround && this.supportedFeet()) {
+      this.jumpBuffer = 0;
+      this.vel.y = Math.max(this.vel.y, tuning.ground.jumpSpeed);
+      this.events.push({ type: 'jump' });
+    } else if (inp.jumpPressed && (this.mode === MODE_SWING || this.mode === MODE_ZIP)) {
       this.cutLine();
       this.holdSwing = false;
-    } else if (inp.swingReleased && this.mode === MODE_SWING) {
+    } else if (this.mode === MODE_SWING && (inp.swingReleased || (this.rope.byButton && !inp.swing))) {
       this.cutLine();
     } else if (this.holdSwing && this.mode !== MODE_SWING && this.mode !== MODE_TRAVERSE && this.swingTarget.valid) {
       this.fireRope(this.swingTarget);
@@ -748,6 +761,7 @@ export class Player {
     rope.losBlocked = 0;
     rope.groundTime = 0;
     rope.fromGround = this.mode === MODE_GROUND || this.mode === MODE_WALL;
+    rope.byButton = true;
     rope.tension = 0;
     this.holdSwing = false;
     this.diving = false;
@@ -1088,6 +1102,12 @@ export class Player {
         }
       } else rope.losBlocked = 0;
     }
+  }
+
+  /** Feet on (or within snapping distance of) a support. */
+  private supportedFeet(): boolean {
+    const s = this.world.supportHeight(this.pos.x, this.pos.z, this.pos.y + 0.05, 0.12);
+    return s.y > -Infinity && s.y >= this.pos.y - tuning.ground.snapDown;
   }
 
   /** Ground movement while a line is in flight from the ground. */
@@ -1715,6 +1735,7 @@ export class Player {
     rope.losBlocked = 0;
     rope.groundTime = 0;
     rope.fromGround = false;
+    rope.byButton = false;
   }
 
   hasFreeDirection(): boolean {

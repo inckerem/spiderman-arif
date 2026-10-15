@@ -40,4 +40,6 @@ async function boot(): Promise<void> {
 
 boot().catch((e) => {
   console.error(e);
+  // Never leave the player on a loading screen that will not finish.
+  fatal(tr.warnings.bootFailed);
 });

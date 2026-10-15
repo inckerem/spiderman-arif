@@ -4,7 +4,7 @@ import { expectClean, openGame, saveResult } from './helpers';
 // (f) Character: procedural animation keeps planted feet fixed (no foot
 // sliding), limbs out of solid geometry, and every bone finite, across
 // locomotion, swinging, wall crawling, zipping and a hard landing crouch;
-// strong releases do air tricks.
+// strong releases do air tricks, which end on landing (a jump never replays one).
 test('f. character: no foot sliding, no limb clipping, no NaN', async ({ page }) => {
   const problems = await openGame(page);
   const r = await page.evaluate(() => {
@@ -12,6 +12,7 @@ test('f. character: no foot sliding, no limb clipping, no NaN', async ({ page })
     const res = g.characterTest();
     delete res.slideLog;
     delete res.clipLog;
+    res.trickReplay = g.trickReplayTest();
     return res;
   });
   saveResult('f-character', r);
@@ -30,5 +31,9 @@ test('f. character: no foot sliding, no limb clipping, no NaN', async ({ page })
   // Acrobatics: strong releases flip or corkscrew; a hard landing drops into the crouch.
   expect(r.tricksFlip + r.tricksTwist).toBeGreaterThan(0);
   expect(r.crouchPeak).toBeGreaterThan(0.4);
+  expect(r.trickReplay.trickStarted).toBe(true);
+  expect(r.trickReplay.landedMs).toBeLessThan(750);
+  expect(r.trickReplay.jumped).toBe(true);
+  expect(r.trickReplay.replayed).toBe(false);
   expectClean(problems);
 });

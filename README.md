@@ -101,15 +101,15 @@ npm run test:quick               # smoke test only
 
 | Test | Checks |
 | --- | --- |
-| a `swing.spec.ts` | Pendulum from 45 degrees: energy drift, period, no NaN, catch conversion, re-attach latency; line controls (holding fires at the crosshair and keeps the line, letting go releases with a push, a tap gives none, Space cuts, holding at open sky does nothing, the pull line eases in and cuts); camera auto-follow |
+| a `swing.spec.ts` | Pendulum from 45 degrees: energy drift, period, no NaN, catch conversion, re-attach latency; line controls (holding fires at the crosshair and keeps the line, letting go releases with a push, a tap gives none, Space cuts, holding at open sky does nothing, the pull line eases in and cuts); line edge cases (pause or lost focus while held lets go, a click shorter than a frame fires, Space while a line from the ground is in flight jumps and keeps it); camera auto-follow |
 | b `fuzz.spec.ts` | 12 simulated minutes of random input over 6 seeds: never inside geometry, below ground, out of bounds, NaN or stuck, camera never inside geometry; head-on 95 m/s impacts never tunnel |
 | c `anchors.spec.ts` | Anchor availability from 500 street, rooftop and park positions (>= 95 %) |
 | d `traversal.spec.ts` | Corner-to-corner city bot and tree-to-tree park bot spend < 10 % of the time on the ground |
 | e `soak.spec.ts` | 30 simulated minutes of mixed play: clean console, no heap growth trend, no GPU resource growth |
-| f `character.spec.ts` | Planted feet never slide, limbs stay out of geometry (including the hard-landing crouch), bones stay finite; strong releases do air tricks |
-| g `ui.spec.ts` | Settings round trip and corrupt storage, costume picker (worn at once, arrow keys, saved across reloads), audio unlock and music decode, mute, pause on lock loss, resume, photo PNG export |
+| f `character.spec.ts` | Planted feet never slide, limbs stay out of geometry (including the hard-landing crouch), bones stay finite; strong releases do air tricks, which end on landing |
+| g `ui.spec.ts` | Settings round trip and corrupt storage, costume picker (worn at once, arrow keys, saved across reloads), audio unlock and music decode, mute, pause on lock loss, resume, photo PNG export; g2: dynamic resolution drops under load and returns to full at 60 Hz |
 | h `rings.spec.ts` | Ring routes clear and reachable, race logic and best times; traffic on roads with stops and turns; pedestrians off the carriageway |
-| i `keybindings.spec.ts` | Rebinding with keys and mouse buttons (conflicts, cancel, clear, reserved keys, no click-through, arrow-key navigation), controls screen and photo panel follow the bindings, the game reacts to the new keys only, persistence and corrupt storage |
+| i `keybindings.spec.ts` | Rebinding with keys and mouse buttons (conflicts, cancel, clear, reserved keys, no click-through, arrow-key navigation), controls screen and photo panel follow the bindings, the game reacts to the new keys only, persistence and corrupt storage (including codes named like `toString`) |
 | `smoke.spec.ts` | Page loads with a clean console and no request leaves the origin |
 
 Numbers from each run are written to `test-results/*.json`. Software GL in a sandbox does not represent real GPU frame rates, so the suite measures simulation time per tick, draw calls, triangles and memory instead of FPS.
@@ -139,7 +139,7 @@ src/
   i18n/tr.ts        all in-game text (Turkish)
   debug/            tuning panel, test API and in-page test drivers
 docs/               spec, architecture, milestones, decisions
-tests/              Playwright specs a-h, smoke, soak
+tests/              Playwright specs a-i, smoke, soak
 public/audio/       theme.mp3 (the user's music track)
 ```
 

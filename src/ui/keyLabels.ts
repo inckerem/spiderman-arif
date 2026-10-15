@@ -65,6 +65,11 @@ export function learnKey(e: KeyboardEvent): boolean {
   return true;
 }
 
+/** Own entries only: a stored code such as `toString` must not find Object.prototype members. */
+function own<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 function upper(ch: string, code: string): string {
   // Turkish layouts type the dotted i on another key than KeyI (which types ı there).
   if (ch === 'i') return code === 'KeyI' ? 'I' : 'İ';
@@ -75,14 +80,14 @@ function upper(ch: string, code: string): string {
 export function keyLabel(code: string): string {
   const mouse = /^Mouse([0-4])$/.exec(code);
   if (mouse) return tr.keys.mouse[Number(mouse[1])] ?? code;
-  const named = tr.keys.named[code];
+  const named = own<string>(tr.keys.named, code);
   if (named) return named;
   const numpad = /^Numpad(\w+)$/.exec(code);
   if (numpad) {
     const rest = numpad[1] ?? '';
-    return tr.keys.numpad(NUMPAD_SYMBOLS[rest] ?? rest);
+    return tr.keys.numpad(own(NUMPAD_SYMBOLS, rest) ?? rest);
   }
-  const us = /^Key[A-Z]$/.test(code) ? code.slice(3) : /^Digit\d$/.test(code) ? code.slice(5) : US_SYMBOLS[code];
+  const us = /^Key[A-Z]$/.test(code) ? code.slice(3) : /^Digit\d$/.test(code) ? code.slice(5) : own(US_SYMBOLS, code);
   const ch = layout?.get(code) || learned.get(code) || us;
   return ch ? upper(ch, code) : code;
 }

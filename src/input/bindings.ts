@@ -102,6 +102,8 @@ export function isReservedCode(code: string): boolean {
 /** True for a code that may be stored in a slot. */
 export function isBindableCode(code: unknown): code is string {
   if (typeof code !== 'string' || !CODE_PATTERN.test(code) || isReservedCode(code)) return false;
+  // No key reports a code named like an Object.prototype member (`toString`).
+  if (code in Object.prototype) return false;
   if (code.startsWith('Mouse')) return /^Mouse[0-4]$/.test(code);
   return true;
 }

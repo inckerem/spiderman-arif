@@ -9,6 +9,7 @@ import {
   MeshToonMaterial,
   NearestFilter,
   RedFormat,
+  ShaderChunk,
   ShaderMaterial,
   UniformsLib,
   UniformsUtils,
@@ -46,6 +47,19 @@ export function toonGradient(): DataTexture {
   t.needsUpdate = true;
   gradientTex = t;
   return t;
+}
+
+/**
+ * three's PCF shadows rotate their five taps by per-pixel noise that is meant
+ * to be averaged away by TAA. Without TAA it reads as stippled grain along
+ * every shadow edge, so the taps keep one fixed pattern: a clean, stable edge
+ * (each tap is still a filtered 2x2 compare). Call before any shader compiles.
+ */
+export function stableShadowSampling(): void {
+  ShaderChunk.shadowmap_pars_fragment = ShaderChunk.shadowmap_pars_fragment.replace(
+    /interleavedGradientNoise\( gl_FragCoord\.xy \) \* PI2/g,
+    '0.0',
+  );
 }
 
 const MRT_DECL = 'layout(location = 1) out highp vec4 gNormalOut;\n';

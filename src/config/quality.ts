@@ -13,8 +13,8 @@ export interface QualityPreset {
 }
 
 export const QUALITY: QualityPreset[] = [
-  { name: 'low', shadows: false, shadowMap: 1024, shadowExtent: 60, fxaa: false, maxDynScale: 0.9, pixelRatioCap: 1, viewFar: 1700, trafficCars: 90, pedestrians: 120 },
-  { name: 'medium', shadows: true, shadowMap: 1024, shadowExtent: 75, fxaa: true, maxDynScale: 1, pixelRatioCap: 1, viewFar: 2300, trafficCars: 180, pedestrians: 240 },
+  { name: 'low', shadows: false, shadowMap: 1024, shadowExtent: 60, fxaa: false, maxDynScale: 1, pixelRatioCap: 1, viewFar: 1700, trafficCars: 90, pedestrians: 120 },
+  { name: 'medium', shadows: true, shadowMap: 2048, shadowExtent: 75, fxaa: true, maxDynScale: 1, pixelRatioCap: 1.5, viewFar: 2300, trafficCars: 180, pedestrians: 240 },
   { name: 'high', shadows: true, shadowMap: 2048, shadowExtent: 110, fxaa: true, maxDynScale: 1, pixelRatioCap: 1.5, viewFar: 2900, trafficCars: 280, pedestrians: 380 },
   { name: 'ultra', shadows: true, shadowMap: 4096, shadowExtent: 150, fxaa: true, maxDynScale: 1, pixelRatioCap: 2, viewFar: 3200, trafficCars: 400, pedestrians: 560 },
 ];

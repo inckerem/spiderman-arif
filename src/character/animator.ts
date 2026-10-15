@@ -163,6 +163,8 @@ export class CharacterAnimator {
       this.tricks[this.trick]!++;
     } else if (e.type === 'land') {
       this.sinceLand = 0;
+      // The trick ends on landing, so a jump right after never replays it.
+      this.sinceRelease = 99;
       if (e.impact > 6) this.hipsDrop.velocity -= Math.min(4, e.impact * 0.09);
       // Hard landings without a roll drop into a crouch with one hand on the ground.
       this.crouch = !e.roll && e.impact > 9 ? clamp((e.impact - 9) / 12, 0.45, 1) : 0;

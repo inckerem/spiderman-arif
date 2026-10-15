@@ -15,6 +15,8 @@ export class FixedLoop {
   /** Seconds of real time dropped because the frame budget was exceeded. */
   droppedTime = 0;
   lastFrameMs = 0;
+  /** CPU time of the last frame's work (ticks and render), unlike the frame interval free of vsync waits. */
+  lastWorkMs = 0;
   ticksLastFrame = 0;
 
   constructor(
@@ -42,6 +44,7 @@ export class FixedLoop {
   }
 
   private frame(now: number): void {
+    const t0 = performance.now();
     if (this.last < 0) this.last = now;
     let frameDt = (now - this.last) / 1000;
     this.last = now;
@@ -66,6 +69,7 @@ export class FixedLoop {
     this.ticksLastFrame = ticks;
     const alpha = this.manual ? 1 : this.acc / this.dt;
     this.render(alpha, frameDt);
+    this.lastWorkMs = performance.now() - t0;
   }
 
   /** Reset the accumulator (after loading, unpausing) so no burst of ticks runs. */

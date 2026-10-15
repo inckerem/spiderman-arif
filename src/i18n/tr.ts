@@ -214,6 +214,7 @@ export const tr = {
   warnings: {
     noWebGL: 'Bu tarayıcı WebGL2 desteklemiyor. Lütfen güncel bir masaüstü tarayıcı kullanın.',
     musicMissing: 'Müzik dosyası bulunamadı; oyun müziksiz devam ediyor.',
+    bootFailed: 'Oyun başlatılamadı. Sayfayı yenileyin; sorun sürerse bu site için kayıtlı tarayıcı verilerini silin.',
   },
   /** Fictional in-world signage (world art, kept here with all other text). */
   signs: [
