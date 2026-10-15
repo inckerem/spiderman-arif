@@ -35,7 +35,7 @@ export const JOINTS = [
 export type JointName = (typeof JOINTS)[number];
 
 /** Rest-pose offsets of each joint from its parent (metres), T-pose-ish with arms down. */
-const REST: Record<JointName, { parent: JointName | null; offset: [number, number, number] }> = {
+export const REST: Record<JointName, { parent: JointName | null; offset: [number, number, number] }> = {
   hips: { parent: null, offset: [0, 0.98, 0] },
   spine: { parent: 'hips', offset: [0, 0.11, 0] },
   chest: { parent: 'spine', offset: [0, 0.2, 0] },

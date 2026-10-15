@@ -42,7 +42,7 @@ import { CombatView } from './combat/client/combatView';
 import { LocalCombatLink } from './combat/client/localLink';
 import { makeHeroState } from './combat/client/link';
 import { fillHeroState } from './combat/client/heroState';
-import { DebugCapsules } from './combat/render/debugCapsules';
+import { EnemyRenderer } from './combat/render/enemyRenderer';
 import { HeroCombat } from './combat/client/heroCombat';
 import type { CombatEvent } from './combat/types';
 
@@ -145,7 +145,7 @@ export class Game {
   /** What the client knows about combat (the link's messages): enemies, own health, threats. */
   combatView!: CombatView;
   /** Temporary enemy visuals (chunk 5 brings the rigs). */
-  combatCapsules!: DebugCapsules;
+  enemyRender!: EnemyRenderer;
   /** The hero's side of combat: input routing, combos, lunge and dodge, hit prediction. */
   heroCombat!: HeroCombat;
   /**
@@ -214,7 +214,7 @@ export class Game {
     this.combatSim = new CombatSim(this.world, this.layout, this.spawns, this.opts.seed, { pvp: false, maxEnemies: tuning.events.maxEnemiesSp });
     this.combatView = new CombatView();
     this.combatLink = new LocalCombatLink(this.combatSim, this.combatView);
-    this.combatCapsules = new DebugCapsules(tuning.events.maxEnemiesSp);
+    this.enemyRender = new EnemyRenderer(this.particles);
     this.heroCombat = new HeroCombat(this.player, this.world, this.combatLink);
     this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
@@ -222,7 +222,7 @@ export class Game {
     this.sky = new Sky(this.opts.seed);
     this.scene.add(this.sky.group);
     this.scene.add(this.visuals.group);
-    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh, this.traffic.mesh, this.peds.mesh, this.rings.mesh, this.rain.mesh, this.combatCapsules.mesh);
+    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh, this.traffic.mesh, this.peds.mesh, this.rings.mesh, this.rain.mesh, this.enemyRender.group);
     this.scene.fog = new Fog(0xb4dbf6, 300, 2000);
     this.sun = new DirectionalLight(0xffffff, 2.4);
     this.sun.castShadow = true;
@@ -247,7 +247,8 @@ export class Game {
     this.dayNight.dayLengthMinutes = tuning.time.dayLengthMinutes;
     this.applyQuality(1);
     this.dayNight.apply();
-    // Compile every shader during loading so play never hitches on first use.
+    // Compile every shader during loading so play never hitches on first use (enemies: one of each rig on show).
+    this.enemyRender.warmup(this.layout.spawn[0], this.layout.spawn[1], this.layout.spawn[2]);
     this.renderer.compile(this.scene, this.rig.camera);
     this.spawn();
     this.applyLifeDensity();
@@ -394,6 +395,7 @@ export class Game {
         this.rig.snap();
       }
       this.heroCombat.onEvent(e);
+      this.enemyRender.onEvent(e, this.combatView, this.player.pos, link.renderTime());
       this.onCombatEvent?.(e);
     }
   }
@@ -406,7 +408,7 @@ export class Game {
     this.combatView.reset();
     this.heroCombat.reset();
     this.player.clearCombat();
-    this.combatCapsules.update(this.combatView, 0);
+    this.enemyRender.reset();
   }
 
   /** Visual effects triggered by simulation events (of the game's player or the attract hero). */
@@ -609,8 +611,8 @@ export class Game {
   renderFrame(dt: number): void {
     this.time += dt;
     // Enemies show in play (and photos of it), not behind the menu.
-    this.combatCapsules.mesh.visible = this.view !== 'menu';
-    if (this.view !== 'menu') this.combatCapsules.update(this.combatView, this.combatLink.now());
+    this.enemyRender.group.visible = this.view !== 'menu';
+    if (this.view !== 'menu') this.enemyRender.update(this.combatView, this.rig.camera, this.combatLink.renderTime(), this.combatEnabled ? this.renderPos : null);
     shared.uTime.value = this.time;
     const wx = this.weather;
     this.dayNight.storm = wx.mood;

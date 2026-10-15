@@ -56,9 +56,9 @@ test('c1. combat room in the page: chase, hits, view interpolation, down and roo
       g.step(1);
       for (const id of ids) farMin = Math.min(farMin, dist(id, far[0], far[2]));
     }
-    // Capsules render one instance per enemy.
+    // The enemy rigs draw one instance per enemy near the hero.
     game.renderOnce();
-    const capsules = game.combatCapsules.mesh.count;
+    const capsules = game.enemyRender.visibleCount;
     // Down: health to 0, then a roof respawn after downTime.
     C.clear();
     C.setHp(0);
@@ -227,5 +227,70 @@ test('c5. combat dodge: Space in the window makes the swing miss; air dodge keep
   expect(r.airAttachedAfter).toBe(true);
   expect(r.spaceCutWithoutThreat).toBe(true);
   expect(r.poseFinite).toBe(true);
+  expectClean(problems);
+});
+
+// c6. Enemy rigs: 30 enemies of every archetype in view, draw calls within budget, no shader compiles
+// after loading, LOD bands (near, far, hidden), finite poses.
+test('c6. enemy rendering: 30 rigs, draw calls, programs flat, LOD', async ({ page }) => {
+  test.setTimeout(10 * 60 * 1000);
+  const problems = await openGame(page);
+  const r = await page.evaluate(() => {
+    const g = (window as any).__game;
+    const game = g.game;
+    const C = g.combat;
+    C.enable(true);
+    const spots: Vec[] = C.arenaSpots(1, 0);
+    const [hx, hy, hz] = spots[0]!;
+    g.teleport(hx, hy, hz);
+    g.setTime(12);
+    g.step(4);
+    // The widest view: high above and behind the hero.
+    const wide = () => g.setCameraPose(hx + 26, hy + 30, hz + 26, hx, hy, hz, 70);
+    wide();
+    const before = g.stats();
+    const ids: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      const kind = i % 5;
+      const a = (i / 30) * Math.PI * 2;
+      const d = 5 + (i % 3) * 3;
+      ids.push(C.spawn(kind, hx + Math.cos(a) * d, kind === 4 ? hy + 4 : hy + 0.5, hz + Math.sin(a) * d));
+    }
+    g.step(120);
+    wide();
+    const after = g.stats();
+    const st = { ...game.enemyRender.stats };
+    // Close view: poses finite (the bone texture), calls.
+    g.setCameraPose(hx + 6, hy + 2.5, hz + 6, hx, hy + 1, hz, 60);
+    const close = g.stats();
+    const closeSt = { ...game.enemyRender.stats };
+    const bones: Float32Array = game.enemyRender.bones;
+    let finite = true;
+    for (let i = 0; i < bones.length; i++) if (!Number.isFinite(bones[i])) finite = false;
+    // LOD: move the camera away so the ring sits beyond 40 m, then beyond 150 m.
+    g.setCameraPose(hx + 50, hy + 20, hz + 50, hx, hy, hz, 60);
+    g.renderFrame();
+    const far = { ...game.enemyRender.stats };
+    g.setCameraPose(hx + 140, hy + 60, hz + 140, hx, hy, hz, 60);
+    g.renderFrame();
+    const hidden = { ...game.enemyRender.stats };
+    g.clearCameraPose();
+    return { spawned: ids.filter((id) => id > 0).length, before, after, st, close, closeSt, finite, far, hidden };
+  });
+  saveResult('c6-enemy-render', r);
+  console.log('c6. enemy rendering', JSON.stringify(r));
+  expect(r.spawned).toBe(30);
+  expect(r.st.visible).toBe(30);
+  expect(r.st.near + r.st.far).toBe(30);
+  expect(r.closeSt.near).toBe(30);
+  expect(r.after.calls).toBeLessThanOrEqual(600);
+  // Five archetype meshes and their shadow passes (plus a cocoon mesh at most).
+  expect(r.after.calls - r.before.calls).toBeLessThanOrEqual(12);
+  expect(r.after.programs).toBe(r.before.programs);
+  expect(r.close.programs).toBe(r.before.programs);
+  expect(r.finite).toBe(true);
+  expect(r.far.far).toBeGreaterThan(0);
+  expect(r.far.near).toBe(0);
+  expect(r.hidden.visible).toBe(0);
   expectClean(problems);
 });
