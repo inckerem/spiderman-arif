@@ -1,6 +1,6 @@
 # SKYTHREAD
 
-A single-player 3D open-world web-swinging game for desktop browsers. Swing on lines shot from wrist launchers through a procedurally generated Manhattan-style city of about 1.5 x 1.5 km with a large tree-filled central park, a waterfront with piers and a bridge, live traffic and pedestrians, a dynamic day-night cycle, optional ring races and a photo mode. Everything is built in code: the city, the hero, the animation, the textures and every sound effect. The only asset file is the music track.
+A single-player 3D open-world web-swinging game for desktop and mobile browsers (on phones and tablets with on-screen touch controls). Swing on lines shot from wrist launchers through a procedurally generated Manhattan-style city of about 1.5 x 1.5 km with a large tree-filled central park, a waterfront with piers and a bridge, live traffic and pedestrians, a dynamic day-night cycle, optional ring races and a photo mode. Everything is built in code: the city, the hero, the animation, the textures and every sound effect. The only asset file is the music track.
 
 The in-game interface is in Turkish (all strings in `src/i18n/tr.ts`).
 
@@ -24,7 +24,7 @@ A downloaded ZIP (instead of a clone) can trigger a security prompt. On macOS, r
 
 ### Manual
 
-Requirements: Node.js 22.12+ or 20.19+ (Vite 8 requires one of these; developed on 22), npm, a desktop browser with WebGL2 (current Chrome, Edge or Firefox).
+Requirements: Node.js 22.12+ or 20.19+ (Vite 8 requires one of these; developed on 22), npm, a browser with WebGL2 (current Chrome, Edge, Firefox or Safari; on phones Chrome for Android or Safari on iOS/iPadOS).
 
 ```bash
 npm install
@@ -38,7 +38,7 @@ npm run build        # type-check + bundle into dist/
 npm run preview      # http://127.0.0.1:4173
 ```
 
-Behind the main menu the hero swings through the city on autopilot, filmed by a cinematic camera that cuts between chase, side, low-angle, aerial and orbit shots (attract mode; not playable). Click **Oyna** (Play) to start: the hero begins on the spawn roof and the game captures the mouse (pointer lock). Audio starts after the first click or key press. Press `Esc` to pause; **Ana Menü** in the pause menu goes back to the attract mode. URL parameter `?seed=1234` generates a different city.
+Behind the main menu the hero swings through the city on autopilot, filmed by a cinematic camera that cuts between chase, side, low-angle, aerial and orbit shots (attract mode; not playable). Click **Oyna** (Play) to start: the hero begins on the spawn roof and the game captures the mouse (pointer lock; on phones see below). Audio starts after the first click or key press. Press `Esc` to pause; **Ana Menü** in the pause menu goes back to the attract mode. URL parameter `?seed=1234` generates a different city.
 
 ## Controls
 
@@ -67,6 +67,32 @@ Dive is on C/Q instead of Ctrl because Ctrl+W closes the browser tab while W is 
 Lines go exactly where the crosshair points (a ring of rays 2.5 degrees around it catches building edges and trunks); the crosshair lights up and a diamond marks the point when a line would hold there. Nothing usable under the crosshair means no line. The camera turns toward the travel direction while you fly fast and leave the mouse alone; switch this off under Ayarlar > Kamera otomatik takip.
 
 Costumes: **Kostüm** in the main menu or the pause menu dresses the hero in one of four suits (Kırmızı-Lacivert, Kırmızı-Altın, Siyah-Altın, Siyah-Beyaz); the pick is worn at once and saved with the settings.
+
+### Playing on a phone or tablet
+
+Phones and tablets (a touch screen as the main pointer) get on-screen controls instead of mouse and keyboard; a laptop or desktop with a touchscreen keeps mouse and keyboard. To try the game on a phone, serve it on your network and open the address shown on the phone, in landscape:
+
+```bash
+npm run dev -- --host            # or: npm run build && npm run preview -- --host
+```
+
+The launchers serve on 127.0.0.1 only, which a phone cannot reach. On a desktop, `?dokunmatik=1` in the URL forces the touch controls on (for trying them with browser device emulation) and `?dokunmatik=0` forces them off.
+
+Tap **Oyna**: play starts at once (there is no pointer lock on touch). On Android the game also switches to fullscreen; iPhone Safari has no fullscreen for pages, so the browser bars stay (adding the page to the home screen hides them). The game is landscape only: in portrait a "Cihazını yatay çevir" prompt covers the screen and play pauses. Switching apps also pauses. The first start on a touch device picks Low quality; change it under Ayarlar as usual.
+
+| Control | Action |
+| --- | --- |
+| Left thumb, anywhere on the left side | Floating stick (appears under the thumb): push a little to walk, all the way to run, to the rim (it turns amber) to sprint; steers while swinging |
+| Drag on the right side | Look (own sensitivity under Ayarlar > Dokunmatik bakış hassasiyeti; invert Y applies) |
+| AĞ (hold) | Web line and swing, exactly like holding the left mouse button; let go to release with the push |
+| ÇEK | Pull line (right mouse) |
+| ZIPLA | Jump, cut a line, wall jump (Space) |
+| DALIŞ (hold) | Dive (C/Q) |
+| TIRMAN (hold) | Cling to and climb walls (Shift); also sprints on the ground |
+| + / − | Reel the line in or out (shown while swinging; hold to repeat) |
+| Pause (top left) | Pause menu; photo mode and the music toggle are in the pause menu |
+
+All of these work at the same time (stick, look drag, a held AĞ and a tap on ZIPLA). The crosshair and the line aiming are the same as on desktop, with a wider catch around the crosshair (4 degrees instead of 2.5). In photo mode the stick flies the camera and a drag on the right turns it. A touch also ends the rooftop moment.
 
 Tips: let go on the rising part of a swing while the crosshair pulses for a launch bonus ("MÜKEMMEL BIRAKIŞ!"); fire a line right after a dive to carry the speed into the swing. Fly through the first ring of a route (park, towers, waterfront) to start a timed run; best times are saved. After you have been playing for a while, stand still on a rooftop for five seconds (no keys, no race running) for the rooftop moment: the music starts from the top, the sky runs through dusk into night, rain sets in, the HUD gives way to letterbox bars and the camera circles the crouching hero. Any key, mouse button or a deliberate mouse movement brings everything back (rain off, the time of day where it was, unless you set the hour with 1-4, Y or the photo time slider); M and the photo key work without ending it, and photo mode can capture it.
 
@@ -112,6 +138,7 @@ npm run test:quick               # smoke test only
 | h `rings.spec.ts` | Ring routes clear and reachable, race logic and best times; traffic on roads with stops and turns; pedestrians off the carriageway |
 | i `keybindings.spec.ts` | Rebinding with keys and mouse buttons (conflicts, cancel, clear, reserved keys, no click-through, arrow-key navigation), controls screen and photo panel follow the bindings, the game reacts to the new keys only, persistence and corrupt storage (including codes named like `toString`) |
 | j `attract.spec.ts` | j1: the menu autopilot runs 6 simulated minutes headless: never stuck, in water, below ground, inside geometry or NaN, little ground time, long distance, swings, pull lines, wall runs and perches; the cinematic camera never inside geometry with the hero in frame. j2: the rooftop moment never starts right after a new game on the spawn roof, then starts only after 5 s still on a roof (not on the street, not while moving, not during a race), brings music, night, rain, letterbox and the orbit camera, holds while paused (a flash goes out) and through M and mouse jitter, and a key, a deliberate mouse movement or a click (firing no line) restores the music, rain, HUD and the exact hour, while an hour key keeps its hour |
+| k `touch.spec.ts` | Mobile emulation (844x390, touch, DPR 2): touch mode and Low quality on the first run, Oyna plays without pointer lock, half a stick push walks at half run speed, a full push runs and the rim sprints, a right-side drag turns the camera (invert Y applies), AĞ held keeps a line while the stick, a look drag and a DALIŞ tap happen at once and letting go releases it, ZIPLA, DALIŞ and TIRMAN work, the pause button and Devam Et, portrait shows the rotate prompt and pauses, menus (main, settings, controls, costume, pause) have no horizontal overflow, every button inside the screen and at least 44 px tall at 844x390 and 740x360; k2: a desktop gets no touch controls, `?dokunmatik=1` forces them |
 | `smoke.spec.ts` | Page loads with a clean console and no request leaves the origin |
 
 Numbers from each run are written to `test-results/*.json`. Software GL in a sandbox does not represent real GPU frame rates, so the suite measures simulation time per tick, draw calls, triangles and memory instead of FPS.
@@ -126,7 +153,7 @@ src/
   game.ts           composition root: loop, simulation, camera views, rendering
   config/           tuning.ts (all gameplay constants), quality.ts (render presets)
   core/             fixed-step loop, seeded RNG, math helpers
-  input/            keyboard and mouse state, rebindable key bindings
+  input/            keyboard and mouse state, rebindable key bindings, on-screen touch controls
   physics/          analytic collision world (boxes, cylinders, ellipsoids, terrain, water), grid, raycasts
   player/           player state machine, rope constraint, targeting with assist, autopilot (bot play shared by the menu and the test bots)
   camera/           spring-arm camera with collision, cinematic director (menu)

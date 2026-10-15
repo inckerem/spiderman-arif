@@ -475,7 +475,7 @@ export class Game {
     this.view = 'photo';
   }
 
-  /** WASD + mouse free camera (Space/C up and down, Shift fast), kept out of solid geometry. */
+  /** WASD (or the touch stick) + mouse (or look drag) free camera (Space/C up and down, Shift fast), kept out of solid geometry. */
   private updatePhotoCamera(dt: number, mdx: number, mdy: number): void {
     const pc = this.photoCam;
     const sens = tuning.camera.baseSensitivity * this.rig.sensitivity;
@@ -490,8 +490,9 @@ export class Game {
     // The free camera flies with the movement bindings: jump/dive for up/down, sprint for speed.
     // Keys typed into a focused panel slider adjust the slider, not the camera.
     const keys = !(document.activeElement instanceof HTMLInputElement);
-    const f = keys ? (k.isHeld('forward') ? 1 : 0) - (k.isHeld('back') ? 1 : 0) : 0;
-    const r = keys ? (k.isHeld('right') ? 1 : 0) - (k.isHeld('left') ? 1 : 0) : 0;
+    // The touch stick flies it too (analog).
+    const f = (keys ? (k.isHeld('forward') ? 1 : 0) - (k.isHeld('back') ? 1 : 0) : 0) + k.stickY;
+    const r = (keys ? (k.isHeld('right') ? 1 : 0) - (k.isHeld('left') ? 1 : 0) : 0) + k.stickX;
     const u = keys ? (k.isHeld('jump') ? 1 : 0) - (k.isHeld('dive') ? 1 : 0) : 0;
     const speed = (k.isHeld('sprint') ? 40 : 10) * Math.min(dt, 0.1);
     pc.pos.x += (fx * f + rx * r) * speed;

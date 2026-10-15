@@ -1873,3 +1873,44 @@ export function momentFrames(game: Game, app: App, inp: BotInput, prev: BotInput
   }
   return { ...momentState(game, app), maxPhase, samples };
 }
+
+// -----------------------------------------------------------------------------
+// k. Touch controls: places for the touch spec (the real-time loop keeps running)
+// -----------------------------------------------------------------------------
+
+/**
+ * Puts the hero where a touch control can be measured: on an avenue with a
+ * long straight run ahead (yaw 0 looks along it), in front of a tall facade
+ * (yaw 0 faces it), or high in the air above an avenue.
+ */
+export function touchSpot(game: Game, kind: 'avenue' | 'wall' | 'air'): Record<string, number> | null {
+  const pl = game.player;
+  const L = game.layout;
+  const out = new Vector3();
+  const place = (x: number, y: number, z: number, yaw: number, pitch: number): Record<string, number> => {
+    pl.teleport(x, y, z);
+    game.prevPos.copy(pl.pos);
+    game.rig.setLook(yaw, pitch);
+    game.snapCamera();
+    return { x, y, z };
+  };
+  if (kind === 'wall') {
+    for (const b of L.buildings) {
+      if (b.height < 45) continue;
+      const f = b.footprint;
+      if (f.maxX - f.minX < 16) continue;
+      const cx = (f.minX + f.maxX) / 2;
+      if (!pl.findSafeSpot(cx, 0.6, f.maxZ + 2.2, out) || Math.abs(out.z - (f.maxZ + 2.2)) > 0.5 || out.y > 1) continue;
+      return place(out.x, out.y, out.z, 0, -0.05);
+    }
+    return null;
+  }
+  // The avenue nearest the middle of the land, its middle point.
+  const mx = (L.land.minX + L.land.maxX) / 2;
+  const mz = (L.land.minZ + L.land.maxZ) / 2;
+  let ave = L.avenues[0]!;
+  for (const a of L.avenues) if (!a.perimeter && Math.abs(a.center - mx) < Math.abs(ave.center - mx)) ave = a;
+  if (kind === 'air') return place(ave.center, 90, mz, 0, -0.1);
+  if (!pl.findSafeSpot(ave.center, 1, mz + 60, out)) return null;
+  return place(out.x, out.y, out.z, 0, 0);
+}

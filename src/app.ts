@@ -8,6 +8,7 @@ import { MODE_SWING, MODE_ZIP, type PlayerEvent } from './player/player';
 import type { Action } from './input/bindings';
 import { RooftopMoment } from './extras/rooftopMoment';
 import { tuning } from './config/tuning';
+import { TouchControls, detectTouchMode } from './input/touch';
 
 export type AppState = 'loading' | 'menu' | 'playing' | 'paused' | 'photo';
 
@@ -16,7 +17,10 @@ const WATER_SAMPLES = 10;
 /**
  * Application shell: owns the UI, the audio engine and the game, and runs
  * the screen flow loading -> main menu -> playing <-> paused / photo mode.
- * Pointer lock gates play; losing it (Esc, alt-tab) pauses.
+ * On desktop, pointer lock gates play; losing it (Esc, alt-tab) pauses. On
+ * touch devices (src/input/touch.ts) play starts without a lock, with the
+ * on-screen controls; a hidden page, the pause button or turning the device
+ * to portrait (which shows a rotate prompt) pauses.
  */
 export class App {
   state: AppState = 'loading';
@@ -61,9 +65,23 @@ export class App {
   private warnTimer = 0;
   private photoReturn: 'playing' | 'paused' = 'playing';
   private photoTimePaused = false;
+  /** Touch device: on-screen controls instead of pointer lock (fixed at start-up). */
+  readonly touchMode: boolean;
+  /** The on-screen controls (touch mode only). */
+  touch: TouchControls | null = null;
+  /** Touch mode held in portrait: rotate prompt shown, play paused. */
+  private portrait = false;
 
   constructor(private readonly canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
-    this.ui = new UI(uiRoot);
+    this.touchMode = detectTouchMode();
+    this.ui = new UI(uiRoot, { touch: this.touchMode });
+    if (this.touchMode) {
+      // From the loading screen on: portrait shows the rotate prompt.
+      const check = (): void => this.checkOrientation();
+      window.addEventListener('resize', check);
+      window.addEventListener('orientationchange', check);
+      this.checkOrientation();
+    }
     this.audio = new AudioEngine(`${import.meta.env.BASE_URL}audio/theme.mp3`);
   }
 
@@ -73,6 +91,12 @@ export class App {
     const game = this.game;
     await game.init();
     ui.setLayout(game.layout);
+    if (this.touchMode) {
+      this.touch = new TouchControls(game.input);
+      ui.mountTouch(this.touch.el);
+      // A thumb aims less precisely than a mouse: wider crosshair magnetism.
+      game.player.targeting.touchAim = true;
+    }
     this.moment = new RooftopMoment(game);
     this.applySettings(ui.settings);
     this.wire();
@@ -117,11 +141,55 @@ export class App {
     game.input.onAction((action, e) => this.onAction(action, e));
     window.addEventListener('keydown', (e) => this.onKey(e));
     this.canvas.addEventListener('click', () => {
-      if (this.state === 'playing' || this.state === 'photo') game.input.requestLock();
+      if (!this.touchMode && (this.state === 'playing' || this.state === 'photo')) game.input.requestLock();
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.state === 'playing') this.pause();
     });
+    ui.onPhoto = () => this.enterPhoto();
+    ui.onMusic = () => this.toggleMusic();
+    if (this.touch) this.wireTouch(this.touch, unlock);
+  }
+
+  private wireTouch(touch: TouchControls, unlock: () => void): void {
+    touch.onPause = () => this.pause();
+    // Touch input grants audio activation on release (iOS Safari): retry the unlock there.
+    window.addEventListener('pointerup', unlock, true);
+    window.addEventListener('touchend', unlock, true);
+    // iOS Safari ignores user-scalable=no: block pinch zoom gestures.
+    document.addEventListener('gesturestart', (e) => e.preventDefault());
+  }
+
+  /** Touch mode is landscape only: portrait shows the rotate prompt and pauses play. */
+  private checkOrientation(): void {
+    const portrait = window.innerHeight > window.innerWidth;
+    if (portrait === this.portrait) return;
+    this.portrait = portrait;
+    this.ui.setPortrait(portrait);
+    if (portrait && this.state === 'playing') this.pause();
+  }
+
+  /** Fullscreen hides the browser bars (Android); iPhone Safari has no element fullscreen. Failures are ignored. */
+  private enterFullscreen(): void {
+    const root = document.documentElement;
+    if (document.fullscreenElement || typeof root.requestFullscreen !== 'function') return;
+    try {
+      root
+        .requestFullscreen({ navigationUI: 'hide' })
+        .then(() => {
+          const o = screen.orientation as (ScreenOrientation & { lock?: (o: string) => Promise<void> }) | undefined;
+          return o?.lock?.('landscape');
+        })
+        .catch(() => undefined);
+    } catch {
+      // Not allowed here; play goes on in the browser window.
+    }
+  }
+
+  private toggleMusic(): void {
+    const muted = this.audio.toggleMusic();
+    this.ui.setMusicOn(!muted);
+    this.ui.toast(muted ? tr.hud.musicOff : tr.hud.musicOn);
   }
 
   // ------------------------------------------------------------------ flow
@@ -156,6 +224,7 @@ export class App {
     game.playing = false;
     game.input.enabled = false;
     game.input.clearAll();
+    this.touch?.setView('off');
     this.ui.showClickToResume(false);
     this.ui.setHudVisible(false);
     this.ui.showPause();
@@ -176,9 +245,22 @@ export class App {
     this.audio.setMenuMode(true);
   }
 
-  /** Request pointer lock; play starts once it is granted (the click-to-resume hint covers refusals). */
+  /** Request pointer lock; play starts once it is granted (the click-to-resume hint covers refusals). Touch play starts at once. */
   private lockForPlay(): void {
     const game = this.game;
+    if (this.touchMode) {
+      if (this.portrait) {
+        this.pause();
+        return;
+      }
+      game.input.clearAll();
+      game.input.enabled = true;
+      game.playing = true;
+      this.ui.showClickToResume(false);
+      this.touch?.setView('play');
+      this.enterFullscreen();
+      return;
+    }
     if (document.pointerLockElement === this.canvas) {
       this.onLock(true);
       return;
@@ -262,11 +344,9 @@ export class App {
     if (e.target instanceof HTMLInputElement && action !== 'photo' && action !== 'music') return;
     const game = this.game;
     switch (action) {
-      case 'music': {
-        const muted = this.audio.toggleMusic();
-        this.ui.toast(muted ? tr.hud.musicOff : tr.hud.musicOn);
+      case 'music':
+        this.toggleMusic();
         break;
-      }
       case 'photo':
         if (this.state === 'photo') this.exitPhoto();
         else this.enterPhoto();
@@ -302,6 +382,10 @@ export class App {
     game.resize();
     game.rig.fovOffset = s.fovOffset;
     game.rig.sensitivity = s.sensitivity;
+    if (this.touch) {
+      this.touch.lookSensitivity = s.touchSensitivity;
+      this.touch.mouseSensitivity = s.sensitivity;
+    }
     game.rig.invertY = s.invertY;
     game.rig.autoFollow = s.cameraFollow;
     game.dayNight.dayLengthMinutes = s.dayLengthMinutes;
@@ -406,6 +490,12 @@ export class App {
       ui.updateMinimap(pl.pos.x, pl.pos.z, game.rig.yaw, this.minimapRings);
     }
     ui.updateHud(hud);
+    const touch = this.touch;
+    if (touch) {
+      touch.setView(this.state === 'playing' && game.playing ? 'play' : this.state === 'photo' ? 'photo' : 'off');
+      touch.setSwinging(this.state === 'playing' && pl.mode === MODE_SWING && pl.rope.attached);
+      touch.update(dt);
+    }
     // Audio listener: the hero on screen (in the menu, the attract hero).
     const L = this.listener;
     const ap = this.state === 'menu' ? game.attract.player : pl;

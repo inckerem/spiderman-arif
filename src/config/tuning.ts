@@ -144,6 +144,8 @@ export const tuning = {
   /** Crosshair aim: lines go where the centre ray hits; rays this close around it catch edges. */
   aim: {
     magnetismDeg: 2.5,
+    /** Wider magnetism with touch controls: a thumb aims less precisely than a mouse. */
+    touchMagnetismDeg: 4,
   },
   /** Wide anchor search (cone around the view). Gameplay aims with the crosshair; test bots use this to pick where to look. */
   assist: {
@@ -240,6 +242,19 @@ export const tuning = {
     /** Lightning: seconds between flashes. */
     boltMin: 8,
     boltMax: 18,
+  },
+  /** On-screen touch controls (phones and tablets). */
+  touch: {
+    /** Joystick: knob travel (CSS px), dead zone and the deflection that reaches full run speed (fractions of the travel). */
+    stickRadius: 56,
+    deadZone: 0.12,
+    fullAt: 0.88,
+    /** Knob at the rim (this fraction of the travel or more): sprint on the ground. */
+    sprintAt: 0.97,
+    /** Camera turn per CSS px of look drag at sensitivity 1 (rad). */
+    lookRadPerPx: 0.0055,
+    /** Held reel buttons repeat a wheel notch at this interval (s). */
+    reelRepeat: 0.16,
   },
 };
 
@@ -339,6 +354,7 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'wall.stick': [0, 10, 0.1],
   'wall.letGoPush': [0, 10, 0.1],
   'aim.magnetismDeg': [0, 8, 0.1],
+  'aim.touchMagnetismDeg': [0, 10, 0.1],
   'assist.range': [20, 120, 1],
   'assist.minDistance': [0, 30, 0.5],
   'assist.idealDistance': [10, 80, 0.5],
@@ -408,6 +424,12 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'moment.orbitSpeed': [0, 1, 0.01],
   'moment.boltMin': [2, 60, 0.5],
   'moment.boltMax': [2, 90, 0.5],
+  'touch.stickRadius': [30, 120, 1],
+  'touch.deadZone': [0, 0.5, 0.01],
+  'touch.fullAt': [0.3, 1, 0.01],
+  'touch.sprintAt': [0.5, 1, 0.01],
+  'touch.lookRadPerPx': [0.001, 0.02, 0.0005],
+  'touch.reelRepeat': [0.05, 0.6, 0.01],
 };
 
 /** Deep copy of the shipped values so the debug panel can reset. */

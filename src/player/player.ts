@@ -463,7 +463,9 @@ export class Player {
     const G = tuning.ground;
     const v = this.vel;
     const wishLen = this.wish.length();
-    const maxSpeed = inp.sprint ? G.sprintSpeed : G.runSpeed;
+    // The touch stick at its rim sprints too, but only the sprint action clings to walls.
+    const sprint = inp.sprint || inp.groundSprint;
+    const maxSpeed = sprint ? G.sprintSpeed : G.runSpeed;
     const hs = Math.hypot(v.x, v.z);
     const rolling = this.rollTimer > 0;
     if (hs > maxSpeed + 0.05) {
@@ -482,7 +484,7 @@ export class Player {
     } else if (!rolling) {
       const tx = this.wish.x * maxSpeed,
         tz = this.wish.z * maxSpeed;
-      const acc = wishLen > 0.01 ? (inp.sprint ? G.sprintAccel : G.accel) : G.decel;
+      const acc = wishLen > 0.01 ? (sprint ? G.sprintAccel : G.accel) : G.decel;
       const dx = tx - v.x,
         dz = tz - v.z;
       const dl = Math.hypot(dx, dz);
@@ -500,7 +502,7 @@ export class Player {
 
     if (this.jumpBuffer > 0 && !rolling) {
       this.jumpBuffer = 0;
-      v.y = G.jumpSpeed + (inp.sprint && hs > G.runSpeed ? G.sprintJumpBonus : 0);
+      v.y = G.jumpSpeed + (sprint && hs > G.runSpeed ? G.sprintJumpBonus : 0);
       this.setMode(MODE_AIR);
       this.coyote = 0;
       this.events.push({ type: 'jump' });

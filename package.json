@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "SKYTHREAD - a single-player 3D open-world web-swinging game for desktop browsers.",
+  "description": "SKYTHREAD - a single-player 3D open-world web-swinging game for desktop and mobile browsers.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build",

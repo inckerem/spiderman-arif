@@ -149,6 +149,11 @@ const ICON_SPEAKER =
 const ICON_MOUSE =
   '<svg viewBox="0 0 24 24"><rect x="5.5" y="2.5" width="13" height="19" rx="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/>' +
   '<path fill="currentColor" d="M12 3.7V10H6.6V9A5.4 5.4 0 0 1 12 3.7z"/><path d="M12 2.5v7.5" stroke="currentColor" stroke-width="2"/></svg>';
+const ICON_PHONE =
+  '<svg viewBox="0 0 64 64"><rect x="20" y="6" width="24" height="44" rx="4" fill="none" stroke="currentColor" stroke-width="4"/>' +
+  '<circle cx="32" cy="43" r="2.6" fill="currentColor"/>' +
+  '<path d="M10 40a24 24 0 0 0 20 18" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>' +
+  '<path d="M24 52l6 6-7 4" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_CAMERA =
   '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 7h3.2l1.9-2.6h5.8L16.8 7H20a1.5 1.5 0 0 1 1.5 1.5v10A1.5 1.5 0 0 1 20 20H4a1.5 1.5 0 0 1-1.5-1.5v-10A1.5 1.5 0 0 1 4 7z"/>' +
   '<circle cx="12" cy="13.2" r="4" fill="none" stroke="#111" stroke-width="2.2"/></svg>';
@@ -252,11 +257,18 @@ export class UI {
   onPlay: () => void = noop;
   onResume: () => void = noop;
   onMainMenu: () => void = noop;
+  /** Touch pause menu: photo mode and the music toggle (keys P and M on desktop). */
+  onPhoto: () => void = noop;
+  onMusic: () => void = noop;
   onUiSound: (kind: UiSound) => void = noop;
   /** Called on every settings change, after the settings were saved. */
   onSettingsChange: (s: Settings) => void = noop;
   /** Live settings object (loaded from localStorage); mutated in place by the settings screen. */
-  readonly settings: Settings = loadSettings();
+  readonly settings: Settings;
+  /** Touch device: touch texts and settings, no key-binding screen, phone-sized HUD. */
+  readonly touch: boolean;
+  /** What "reset to defaults" restores (touch devices default to Low quality). */
+  private readonly defaults: Settings;
 
   private readonly root: HTMLElement;
   private readonly hud: Hud;
@@ -283,6 +295,8 @@ export class UI {
   private readonly settingSyncers: Array<() => void> = [];
   private readonly controlsTables: HTMLDivElement = el('div', 'sk-ctl-tables');
   private readonly bindingSlots: BindingSlotView[] = [];
+  private musicLabel: Text | null = null;
+  private rotateEl: HTMLDivElement | null = null;
 
   private screen: MenuScreen | null = null;
   /** Screens to return to with Back, each with the button that opened the next one. */
@@ -303,9 +317,14 @@ export class UI {
   private resumeShown = false;
   private cine = false;
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, opts: { touch?: boolean } = {}) {
+    this.touch = opts.touch === true;
+    // First run on a touch device starts on Low quality (a stored choice always wins).
+    this.defaults = this.touch ? Object.freeze<Settings>({ ...DEFAULT_SETTINGS, quality: 0 }) : DEFAULT_SETTINGS;
+    this.settings = loadSettings(this.touch ? { quality: 0 } : {});
     this.root = root;
     root.classList.add('sk-ui');
+    root.classList.toggle('sk-is-touch', this.touch);
     root.setAttribute('lang', 'tr');
 
     this.hud = new Hud();
@@ -359,6 +378,16 @@ export class UI {
     this.loadingStage = loading.stage;
 
     root.append(this.hud.layer, this.letterbox, this.hud.fpsEl, this.resumeEl, this.photoEl, this.menuLayer, top, this.loadingEl);
+    if (this.touch) {
+      // Portrait prompt: above everything, including the loading screen.
+      const rotate = el('div', 'sk-rotate');
+      rotate.setAttribute('role', 'alert');
+      const box = el('div', 'sk-rotate-box');
+      box.append(icon(ICON_PHONE, 'sk-icon sk-rotate-icon'), el('p', 'sk-rotate-title', tr.touch.rotateTitle), el('p', 'sk-rotate-text', tr.touch.rotateText));
+      rotate.append(box);
+      root.append(rotate);
+      this.rotateEl = rotate;
+    }
 
     window.addEventListener('resize', this.onResize);
     window.addEventListener('pointerdown', this.onPointerDown, true);
@@ -384,6 +413,26 @@ export class UI {
   /** True while the photo-mode panel is open. */
   get photoOpen(): boolean {
     return this.photo !== null;
+  }
+
+  /** Places the on-screen touch controls above the HUD and below the photo panel and menus. */
+  mountTouch(layer: HTMLElement): void {
+    this.root.insertBefore(layer, this.photoEl);
+  }
+
+  /** Touch mode in portrait: the rotate prompt covers the screen. */
+  setPortrait(on: boolean): void {
+    this.root.classList.toggle('sk-portrait', on);
+    if (this.rotateEl) this.rotateEl.classList.toggle('is-on', on);
+  }
+
+  get portraitPrompt(): boolean {
+    return this.rotateEl?.classList.contains('is-on') ?? false;
+  }
+
+  /** Label of the touch pause menu's music button. */
+  setMusicOn(on: boolean): void {
+    if (this.musicLabel) setText(this.musicLabel, tr.menu.music(on));
   }
 
   // ---------------------------------------------------------------- loading
@@ -519,6 +568,8 @@ export class UI {
   // ---------------------------------------------------------------- private
 
   private sound(kind: UiSound): void {
+    // A tap also fires mouseenter: no hover blip before every click on touch screens.
+    if (this.touch && kind === 'hover') return;
     this.onUiSound(kind);
   }
 
@@ -533,7 +584,8 @@ export class UI {
   private readonly onResize = (): void => {
     const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize);
     const rem = Number.isFinite(rootPx) && rootPx > 0 ? rootPx : 16;
-    const size = clamp(Math.round(rem * 12.5), 176, 250);
+    // Touch: a small map in the top-right corner, clear of the buttons.
+    const size = this.touch ? clamp(Math.round(Math.min(window.innerWidth, window.innerHeight) * 0.3), 96, 150) : clamp(Math.round(rem * 12.5), 176, 250);
     const dpr = clamp(window.devicePixelRatio || 1, 1, 3);
     const headFont = getComputedStyle(this.root).getPropertyValue('--sk-font-head').trim();
     this.minimap.resize(size, dpr, headFont || 'Impact, sans-serif');
@@ -740,7 +792,7 @@ export class UI {
       this.button(tr.menu.settings, '', (b) => this.openSub('settings', b)),
     );
     const audioHint = el('p', 'sk-audio-hint');
-    audioHint.append(icon(ICON_SPEAKER), el('span', 'sk-audio-hint-text', tr.menu.audioHint));
+    audioHint.append(icon(ICON_SPEAKER), el('span', 'sk-audio-hint-text', this.touch ? tr.menu.audioHintTouch : tr.menu.audioHint));
     wrap.append(el('div', 'sk-sunburst'), el('h1', 'sk-logo', tr.title), tagline, nav, audioHint);
     screen.append(wrap, el('p', 'sk-credits', tr.menu.credits));
     return { screen, audioHint };
@@ -755,8 +807,18 @@ export class UI {
       this.button(tr.menu.costume, '', (b) => this.openSub('costume', b)),
       this.button(tr.menu.controls, '', (b) => this.openSub('controls', b)),
       this.button(tr.menu.settings, '', (b) => this.openSub('settings', b)),
-      this.button(tr.menu.mainMenu, '', () => this.runWithDefault(this.onMainMenu, () => this.showMainMenu())),
     );
+    if (this.touch) {
+      // No P and M keys on a phone: photo mode and the music toggle live here.
+      const music = this.button(tr.menu.music(true), '', () => this.onMusic());
+      const label = music.querySelector('.sk-btn-label');
+      if (label) {
+        label.textContent = '';
+        this.musicLabel = textNode(label, tr.menu.music(true));
+      }
+      nav.append(this.button(tr.menu.photo, '', () => this.onPhoto()), music);
+    }
+    nav.append(this.button(tr.menu.mainMenu, '', () => this.runWithDefault(this.onMainMenu, () => this.showMainMenu())));
     panel.append(this.panelTitle(tr.menu.paused), nav);
     screen.append(panel);
     return screen;
@@ -829,13 +891,44 @@ export class UI {
     for (const tip of tr.controls.tips) list.append(el('li', '', tip));
     tips.append(el('h3', 'sk-tips-title', tr.controls.tipsTitle), list);
     const actions = el('div', 'sk-actions');
-    actions.append(
-      this.button(tr.controls.rebind, 'is-small is-ghost', (b) => this.openSub('bindings', b)),
-      this.backButton(),
-    );
-    panel.append(this.panelTitle(tr.controls.title), this.controlsTables, tips, actions);
+    if (this.touch) {
+      // Touch: the on-screen controls instead of keys; no key-binding screen.
+      actions.append(this.backButton());
+      panel.append(this.panelTitle(tr.controls.title), this.touchControlsTable(), tips, actions);
+    } else {
+      actions.append(
+        this.button(tr.controls.rebind, 'is-small is-ghost', (b) => this.openSub('bindings', b)),
+        this.backButton(),
+      );
+      panel.append(this.panelTitle(tr.controls.title), this.controlsTables, tips, actions);
+    }
     screen.append(panel);
     return screen;
+  }
+
+  /** The touch controls card: on-screen button captions and what they do. */
+  private touchControlsTable(): HTMLDivElement {
+    const wrap = el('div', 'sk-ctl-tables');
+    const rows = tr.controls.touchRows;
+    const half = Math.ceil(rows.length / 2);
+    for (const part of [rows.slice(0, half), rows.slice(half)]) {
+      const table = el('table', 'sk-ctl-table');
+      const body = el('tbody');
+      for (const [cap, note, text] of part) {
+        const row = el('tr');
+        const th = el('th');
+        th.scope = 'row';
+        const keys = el('span', 'sk-keys');
+        keys.append(el('span', 'sk-tcap', cap));
+        if (note) keys.append(el('span', 'sk-keys-note', note));
+        th.append(keys);
+        row.append(th, el('td', '', text));
+        body.append(row);
+      }
+      table.append(body);
+      wrap.append(table);
+    }
+    return wrap;
   }
 
   /** Fills the two controls tables from the current bindings. */
@@ -913,20 +1006,22 @@ export class UI {
         }),
       ]),
     );
+    const sens = (key: 'sensitivity' | 'touchSensitivity'): SliderSpec => ({
+      min: SETTINGS_LIMITS[key].min,
+      max: SETTINGS_LIMITS[key].max,
+      step: 0.05,
+      toUi: (v) => v,
+      fromUi: (u) => roundToStep(u, 0.05),
+      format: (v) => `${formatDecimal2(v)}${S.unitTimes}`,
+    });
+    // Touch: look-drag sensitivity instead of the mouse's, and no key bindings.
     right.append(
-      this.group(S.groupControls, [
-        this.sliderRow('sensitivity', S.sensitivity, {
-          min: SETTINGS_LIMITS.sensitivity.min,
-          max: SETTINGS_LIMITS.sensitivity.max,
-          step: 0.05,
-          toUi: (v) => v,
-          fromUi: (u) => roundToStep(u, 0.05),
-          format: (v) => `${formatDecimal2(v)}${S.unitTimes}`,
-        }),
-        this.toggleRow('invertY', S.invertY),
-        this.toggleRow('cameraFollow', S.cameraFollow),
-        this.bindingsRow(),
-      ]),
+      this.group(
+        S.groupControls,
+        this.touch
+          ? [this.sliderRow('touchSensitivity', S.touchSensitivity, sens('touchSensitivity')), this.toggleRow('invertY', S.invertY), this.toggleRow('cameraFollow', S.cameraFollow)]
+          : [this.sliderRow('sensitivity', S.sensitivity, sens('sensitivity')), this.toggleRow('invertY', S.invertY), this.toggleRow('cameraFollow', S.cameraFollow), this.bindingsRow()],
+      ),
       this.group(S.groupAudio, [
         this.sliderRow('masterVolume', S.master, pct('masterVolume')),
         this.sliderRow('musicVolume', S.music, pct('musicVolume')),
@@ -961,7 +1056,7 @@ export class UI {
 
   /** Resets this screen's settings; key bindings and the costume have their own screens. */
   private resetSettings(): void {
-    Object.assign(this.settings, DEFAULT_SETTINGS, { bindings: this.settings.bindings, costume: this.settings.costume });
+    Object.assign(this.settings, this.defaults, { bindings: this.settings.bindings, costume: this.settings.costume });
     this.syncSettings();
     this.commitSettings();
   }
@@ -1319,6 +1414,11 @@ export class UI {
     const key = (a: Action): string => primaryLabel(b[a]) ?? tr.bindings.empty;
     const move = MOVE_ACTIONS.map(key);
     const moveText = move.every((m) => [...m].length === 1) ? move.join('') : move.join(' ');
+    if (this.touch) {
+      this.photoExitLabel.textContent = tr.photo.exit(null);
+      this.photoHint.textContent = tr.photo.touchHint;
+      return;
+    }
     this.photoExitLabel.textContent = tr.photo.exit(primaryLabel(b.photo));
     this.photoHint.textContent = tr.photo.hint(moveText, key('jump'), key('dive'), key('sprint'));
   }
