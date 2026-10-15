@@ -16,6 +16,7 @@ import {
 import type { TickInput } from '../input/input';
 import { Targeting, makeAnchorResult, copyAnchor, type AnchorResult } from './targeting';
 import type { CityLayout } from '../world/types';
+import { findSafeSpot } from '../physics/safeSpot';
 
 export const MODE_GROUND = 0;
 export const MODE_AIR = 1;
@@ -23,7 +24,44 @@ export const MODE_SWING = 2;
 export const MODE_ZIP = 3;
 export const MODE_WALL = 4;
 export const MODE_TRAVERSE = 5;
-export const MODE_NAMES = ['ground', 'air', 'swing', 'zip', 'wall', 'traverse'] as const;
+/** Combat (M11): auto-lunge, strike or ground dodge, a kinematic move like zip (`strike.kind`). */
+export const MODE_STRIKE = 6;
+export const MODE_NAMES = ['ground', 'air', 'swing', 'zip', 'wall', 'traverse', 'strike'] as const;
+
+/** `strike.kind` in MODE_STRIKE. */
+export const STRIKE_LUNGE = 0;
+export const STRIKE_HIT = 1;
+export const STRIKE_DODGE = 2;
+
+/**
+ * Combat animation actions (`combatAnim.action`), read by the animator's
+ * combat overlay; replicated as a byte in M12.
+ */
+export const CA = {
+  NONE: 0,
+  LUNGE: 1,
+  JAB: 2,
+  CROSS: 3,
+  KICK: 4,
+  UPPER: 5,
+  AIR: 6,
+  GROUND: 7,
+  TAKEDOWN: 8,
+  YANK: 9,
+  PIN: 10,
+  DODGE: 11,
+  HURT: 12,
+  DOWN: 13,
+  GETUP: 14,
+} as const;
+
+/** What the animator plays on top of the movement pose: action, start (player time), length, side (0 left, 1 right). */
+export interface CombatAnim {
+  action: number;
+  t0: number;
+  dur: number;
+  side: number;
+}
 
 export const TRAV_VAULT = 0;
 export const TRAV_MANTLE = 1;
@@ -46,7 +84,15 @@ export type PlayerEvent =
   | { type: 'mantle' }
   | { type: 'splash'; x: number; y: number; z: number }
   | { type: 'respawn' }
-  | { type: 'recover' };
+  | { type: 'recover' }
+  /** Combat (M11): a lunge started / ended (ok: arrived within reach), a strike's contact frame, a dodge, damage taken, knocked out, back up. */
+  | { type: 'lunge' }
+  | { type: 'lungeEnd'; ok: boolean }
+  | { type: 'strike'; move: number }
+  | { type: 'dodge' }
+  | { type: 'hurt'; dmg: number }
+  | { type: 'down' }
+  | { type: 'revive' };
 
 interface RopeState {
   firing: boolean;
@@ -96,6 +142,28 @@ interface ZipState {
   hand: number;
 }
 
+interface StrikeState {
+  /** STRIKE_LUNGE, STRIKE_HIT or STRIKE_DODGE. */
+  kind: number;
+  t: number;
+  dur: number;
+  /** Strike: move (`combat/types` MOVE), contact time, contact emitted. */
+  move: number;
+  contact: number;
+  hit: boolean;
+  /** Lunge target (feet) and stop distance (horizontal, from its centre); dodge direction. */
+  tx: number;
+  ty: number;
+  tz: number;
+  stop: number;
+  dx: number;
+  dz: number;
+  /** Started in the air (air lunge, air strike). */
+  air: boolean;
+  lastDist: number;
+  stall: number;
+}
+
 interface WallState {
   id: number;
   nx: number;
@@ -117,6 +185,17 @@ interface TraverseState {
   ignoreA: number;
   ignoreB: number;
 }
+
+/** Ground strikes step forward at this speed (m/s), fading out by the contact. */
+const STRIKE_STEP = 2.2;
+
+function smoothstep01(x: number): number {
+  const t = x < 0 ? 0 : x > 1 ? 1 : x;
+  return t * t * (3 - 2 * t);
+}
+
+/** Wall crawl: stick deflection below this reads as no up/down input. */
+const WALL_STICK_DEADBAND = 0.2;
 
 const tmpA = new Vector3();
 const tmpB = new Vector3();
@@ -173,6 +252,13 @@ export class Player {
   readonly zip: ZipState;
   readonly wall: WallState;
   readonly trav: TraverseState;
+  /** Combat move in MODE_STRIKE (M11). */
+  readonly strike: StrikeState = { kind: STRIKE_HIT, t: 0, dur: 0, move: 0, contact: 0, hit: false, tx: 0, ty: 0, tz: 0, stop: 0, dx: 0, dz: 0, air: false, lastDist: 0, stall: 0 };
+  /** Combat animation for the animator overlay (M11). */
+  readonly combatAnim: CombatAnim = { action: CA.NONE, t0: -1e9, dur: 0, side: 0 };
+  /** Knocked out in combat: lies where it fell (the input router zeroes all input) until revived. */
+  down = false;
+  private strikeSide = 1;
   readonly swingTarget: AnchorResult = makeAnchorResult();
   readonly zipTarget: AnchorResult = makeAnchorResult();
   readonly targeting: Targeting;
@@ -366,11 +452,15 @@ export class Player {
       case MODE_TRAVERSE:
         this.traverseStep(dt);
         break;
+      case MODE_STRIKE:
+        this.strikeStep(dt);
+        break;
     }
 
     if (this.mode !== MODE_GROUND) this.airTime += dt;
     else this.airTime = 0;
-    if (this.mode !== MODE_GROUND && this.mode !== MODE_WALL) {
+    // Combat moves face their target (a sidestep dodge must not turn the body).
+    if (this.mode !== MODE_GROUND && this.mode !== MODE_WALL && this.mode !== MODE_STRIKE) {
       if (this.vel.x * this.vel.x + this.vel.z * this.vel.z > 1) this.facing = Math.atan2(-this.vel.x, -this.vel.z);
     }
 
@@ -464,7 +554,9 @@ export class Player {
     const G = tuning.ground;
     const v = this.vel;
     const wishLen = this.wish.length();
-    const maxSpeed = inp.sprint ? G.sprintSpeed : G.runSpeed;
+    // The touch stick at its rim sprints too, but only the sprint action clings to walls.
+    const sprint = inp.sprint || inp.groundSprint;
+    const maxSpeed = sprint ? G.sprintSpeed : G.runSpeed;
     const hs = Math.hypot(v.x, v.z);
     const rolling = this.rollTimer > 0;
     if (hs > maxSpeed + 0.05) {
@@ -483,7 +575,7 @@ export class Player {
     } else if (!rolling) {
       const tx = this.wish.x * maxSpeed,
         tz = this.wish.z * maxSpeed;
-      const acc = wishLen > 0.01 ? (inp.sprint ? G.sprintAccel : G.accel) : G.decel;
+      const acc = wishLen > 0.01 ? (sprint ? G.sprintAccel : G.accel) : G.decel;
       const dx = tx - v.x,
         dz = tz - v.z;
       const dl = Math.hypot(dx, dz);
@@ -501,7 +593,7 @@ export class Player {
 
     if (this.jumpBuffer > 0 && !rolling) {
       this.jumpBuffer = 0;
-      v.y = G.jumpSpeed + (inp.sprint && hs > G.runSpeed ? G.sprintJumpBonus : 0);
+      v.y = G.jumpSpeed + (sprint && hs > G.runSpeed ? G.sprintJumpBonus : 0);
       this.setMode(MODE_AIR);
       this.coyote = 0;
       this.events.push({ type: 'jump' });
@@ -1409,9 +1501,12 @@ export class Player {
     const camDot = this.camRight.x * rx + this.camRight.z * rz;
     const latSign = Math.abs(camDot) < 0.2 ? 1 : Math.sign(camDot);
     const lat = inp.moveX * latSign;
+    // A slightly tilted thumb (analog stick) neither drops off nor mantles: the
+    // up/down decisions use a deadband; keys give exactly -1, 0 or +1.
+    const my = Math.abs(inp.moveY) < WALL_STICK_DEADBAND ? 0 : inp.moveY;
     wall.run = Math.max(0, wall.run - W.wallRunDecay * dt);
-    if (inp.moveY < 0) wall.run = 0;
-    const up = inp.moveY * W.crawlSpeed + (inp.moveY >= 0 ? wall.run : 0);
+    if (my < 0) wall.run = 0;
+    const up = my * W.crawlSpeed + (my >= 0 ? wall.run : 0);
     this.vel.set(rx * lat * W.crawlSpeed - nx * W.stick, up, rz * lat * W.crawlSpeed - nz * W.stick);
     this.integrate(dt);
     this.vel.set(rx * lat * W.crawlSpeed, up, rz * lat * W.crawlSpeed);
@@ -1433,7 +1528,7 @@ export class Player {
       if (above >= 0) {
         wall.id = above;
       } else {
-        if (inp.moveY > 0 || wall.run > 0) {
+        if (my > 0 || wall.run > 0) {
           if (this.tryLedgeMantle(fx, fz, top)) return;
           // Could not mantle (blocked): pop up off the wall.
           this.vel.set(nx * 2, 7, nz * 2);
@@ -1494,7 +1589,7 @@ export class Player {
       }
     }
     // Bottom: reached the ground.
-    if (c.ground && inp.moveY <= 0) {
+    if (c.ground && my <= 0) {
       this.land(0, 0, c.groundSurface);
       return;
     }
@@ -1622,10 +1717,322 @@ export class Player {
   }
 
   // ---------------------------------------------------------------------------
+  // Combat (M11): lunge, strike, dodge, hits, down. Driven by the input router
+  // (`combat/client/heroCombat.ts`); kinematic through the capsule resolver
+  // like zip, aborting into the air or onto the ground when blocked.
+  // ---------------------------------------------------------------------------
+
+  /** Grounded for combat purposes (feet on a support, not on a line or a wall). */
+  get combatGrounded(): boolean {
+    return this.mode === MODE_GROUND || (this.mode === MODE_STRIKE && !this.strike.air);
+  }
+
+  /** The mode the camera rig reads: a combat move counts as ground or air. */
+  get cameraMode(): number {
+    return this.mode === MODE_STRIKE ? (this.strike.air ? MODE_AIR : MODE_GROUND) : this.mode;
+  }
+
+  /** In a strike past its contact and half its recovery: a buffered next strike may start now. */
+  get strikeCancelable(): boolean {
+    const s = this.strike;
+    if (this.mode !== MODE_STRIKE) return true;
+    if (s.kind !== STRIKE_HIT) return false;
+    return s.hit && s.t >= s.contact + (s.dur - s.contact) * 0.5;
+  }
+
+  /** Play a combat animation on top of whatever the hero does (yank, pin, air dodge, hurt). */
+  playCombatAnim(action: number, dur: number, side = this.strikeSide): void {
+    const a = this.combatAnim;
+    a.action = action;
+    a.t0 = this.time;
+    a.dur = dur;
+    a.side = side;
+  }
+
+  /** Cut a combat animation in the range [from, to] short so it fades out now. */
+  private endCombatAnim(from: number, to: number): void {
+    const a = this.combatAnim;
+    if (a.action >= from && a.action <= to) a.dur = Math.min(a.dur, Math.max(0, this.time - a.t0));
+  }
+
+  /** Face a point (yaw convention of the camera: forward = (-sin, -cos)). */
+  private faceToward(x: number, z: number): void {
+    const dx = x - this.pos.x,
+      dz = z - this.pos.z;
+    if (dx * dx + dz * dz > 1e-6) this.facing = Math.atan2(-dx, -dz);
+  }
+
+  /** Let go of a swing or pull line without any push (before a lunge, when knocked out). */
+  private dropLine(): void {
+    if (this.mode === MODE_SWING) {
+      this.releaseRope(true, 0);
+      this.boostAvailable = false;
+    } else if (this.mode === MODE_ZIP) {
+      this.events.push({ type: 'zipEnd' });
+      this.events.push({ type: 'release', good: false, broken: true, power: 0 });
+      this.setMode(MODE_AIR);
+    }
+    this.holdSwing = false;
+  }
+
+  /**
+   * Auto-lunge toward a target standing at (tx, ty, tz): kinematic at
+   * `combat.lungeSpeed`, until the horizontal distance is `stop` or
+   * `combat.lungeMaxTime` passes. A line is let go first (no push). Returns
+   * false when the hero cannot lunge now (vaulting, mantling, knocked out).
+   */
+  beginLunge(tx: number, ty: number, tz: number, stop: number, air: boolean): boolean {
+    if (this.mode === MODE_TRAVERSE || this.down) return false;
+    this.dropLine();
+    const s = this.strike;
+    s.kind = STRIKE_LUNGE;
+    s.t = 0;
+    // Long air lunges (up to 20 m) get the time they need at lunge speed.
+    const C = tuning.combat;
+    s.dur = Math.max(C.lungeMaxTime, (Math.hypot(tx - this.pos.x, ty - this.pos.y, tz - this.pos.z) - stop) / Math.max(1, C.lungeSpeed) + 0.12);
+    s.tx = tx;
+    s.ty = ty;
+    s.tz = tz;
+    s.stop = stop;
+    s.air = air;
+    s.stall = 0;
+    s.lastDist = Math.hypot(tx - this.pos.x, tz - this.pos.z);
+    this.diving = false;
+    this.faceToward(tx, tz);
+    this.setMode(MODE_STRIKE);
+    this.playCombatAnim(CA.LUNGE, s.dur);
+    this.events.push({ type: 'lunge' });
+    return true;
+  }
+
+  /** Follow a moving target during a lunge. */
+  retargetLunge(tx: number, ty: number, tz: number): void {
+    if (this.mode !== MODE_STRIKE || this.strike.kind !== STRIKE_LUNGE) return;
+    this.strike.tx = tx;
+    this.strike.ty = ty;
+    this.strike.tz = tz;
+  }
+
+  /**
+   * A strike: faces (fx, fz), contact after `contact` seconds (a `strike`
+   * event, where the router checks reach and sends the intent), over after
+   * `dur`. On the ground it carries a small step forward; in the air the hero
+   * hangs (gravity x `combat.airHangGravity` for `combat.airHang`).
+   */
+  beginStrike(move: number, action: number, contact: number, dur: number, fx: number, fz: number): void {
+    if (this.mode === MODE_TRAVERSE || this.down) return;
+    const air = !this.combatGrounded && !this.supportedFeet();
+    if (this.mode === MODE_SWING || this.mode === MODE_ZIP) this.dropLine();
+    const s = this.strike;
+    s.kind = STRIKE_HIT;
+    s.t = 0;
+    s.dur = dur;
+    s.move = move;
+    s.contact = contact;
+    s.hit = false;
+    s.air = air;
+    this.faceToward(fx, fz);
+    const fwdX = -Math.sin(this.facing),
+      fwdZ = -Math.cos(this.facing);
+    if (air) this.vel.set(this.vel.x * 0.3 + fwdX * 1.5, Math.max(this.vel.y, 1), this.vel.z * 0.3 + fwdZ * 1.5);
+    else this.vel.set(fwdX * STRIKE_STEP, 0, fwdZ * STRIKE_STEP);
+    this.diving = false;
+    this.setMode(MODE_STRIKE);
+    this.strikeSide = 1 - this.strikeSide;
+    this.playCombatAnim(action, dur, this.strikeSide);
+  }
+
+  /** Dodge away along (dx, dz): a sidestep on the ground; in the air or on a line only the animation (the line stays). */
+  beginDodge(dx: number, dz: number, air: boolean): void {
+    if (this.down) return;
+    const l = Math.hypot(dx, dz) || 1;
+    this.events.push({ type: 'dodge' });
+    // Side 1: toward the hero's right (right = (cos yaw, -sin yaw)).
+    const side = dx * Math.cos(this.facing) - dz * Math.sin(this.facing) > 0 ? 1 : 0;
+    if (air || !(this.mode === MODE_GROUND || this.mode === MODE_STRIKE)) {
+      this.playCombatAnim(CA.DODGE, tuning.combat.dodgeTime + 0.15, side);
+      return;
+    }
+    const s = this.strike;
+    s.kind = STRIKE_DODGE;
+    s.t = 0;
+    s.dur = tuning.combat.dodgeTime;
+    s.dx = dx / l;
+    s.dz = dz / l;
+    s.air = false;
+    this.setMode(MODE_STRIKE);
+    this.playCombatAnim(CA.DODGE, s.dur + 0.1, side);
+  }
+
+  /** Damage taken (the room's `hit` on this hero): knockback (m/s), a flinch, and any combat move is interrupted. */
+  applyHit(kx: number, ky: number, kz: number, dmg: number): void {
+    this.events.push({ type: 'hurt', dmg });
+    if (this.down) return;
+    this.playCombatAnim(CA.HURT, 0.4);
+    if (this.mode === MODE_STRIKE) {
+      this.vel.set(0, 0, 0);
+      this.endStrike();
+    }
+    if (this.mode === MODE_GROUND) {
+      this.vel.x += kx;
+      this.vel.z += kz;
+      if (ky > 0.5) {
+        this.vel.y = ky;
+        this.setMode(MODE_AIR);
+      }
+    } else if (this.mode === MODE_AIR || this.mode === MODE_SWING) {
+      this.vel.x += kx;
+      this.vel.y += ky;
+      this.vel.z += kz;
+    }
+  }
+
+  /** Forget combat state at once (a new game): up, no combat animation, out of any combat move. */
+  clearCombat(): void {
+    this.down = false;
+    this.combatAnim.action = CA.NONE;
+    this.combatAnim.t0 = -1e9;
+    if (this.mode === MODE_STRIKE) this.setMode(MODE_AIR);
+  }
+
+  /** Knocked out (lines cut, the hero drops and lies there) or back up (a short get-up). */
+  setDown(down: boolean): void {
+    if (down === this.down) return;
+    this.down = down;
+    if (down) {
+      this.dropLine();
+      if (this.mode === MODE_STRIKE || this.mode === MODE_WALL || this.mode === MODE_TRAVERSE) {
+        this.vel.set(0, Math.min(0, this.vel.y), 0);
+        this.setMode(MODE_AIR);
+      }
+      this.diving = false;
+      this.playCombatAnim(CA.DOWN, 1e9);
+      this.events.push({ type: 'down' });
+    } else {
+      this.playCombatAnim(CA.GETUP, 0.7);
+      this.events.push({ type: 'revive' });
+    }
+  }
+
+  private strikeStep(dt: number): void {
+    const s = this.strike;
+    s.t += dt;
+    if (s.kind === STRIKE_LUNGE) {
+      this.lungeStep(dt);
+      return;
+    }
+    if (s.kind === STRIKE_HIT && !s.hit && s.t >= s.contact) {
+      s.hit = true;
+      this.events.push({ type: 'strike', move: s.move });
+    }
+    const v = this.vel;
+    if (s.kind === STRIKE_DODGE) {
+      const k = 1 - smoothstep01(s.t / Math.max(1e-3, s.dur)) * 0.6;
+      v.x = s.dx * tuning.combat.dodgeSpeed * k;
+      v.z = s.dz * tuning.combat.dodgeSpeed * k;
+    } else if (!s.air) {
+      // The step forward fades out by the contact.
+      const k = Math.max(0, 1 - s.t / Math.max(1e-3, s.contact));
+      const hs = Math.hypot(v.x, v.z);
+      if (hs > 1e-4) {
+        const want = STRIKE_STEP * k;
+        v.x *= want / hs;
+        v.z *= want / hs;
+      }
+    }
+    if (s.air) {
+      // Air strike: a hang at reduced gravity, then normal gravity.
+      const C = tuning.combat;
+      const g = tuning.air.gravity * (s.t < C.airHang ? C.airHangGravity : 1);
+      v.y -= g * dt;
+      v.x *= Math.max(0, 1 - 3 * dt);
+      v.z *= Math.max(0, 1 - 3 * dt);
+      this.integrate(dt);
+      if (this.contact.ground && v.y <= 0.5) {
+        s.air = false;
+        v.y = 0;
+        this.grounded = true;
+      }
+    } else {
+      v.y = 0;
+      this.integrate(dt);
+      const sup = this.world.supportHeight(this.pos.x, this.pos.z, this.pos.y + 0.05, 0.12);
+      if (sup.y > -Infinity && sup.y >= this.pos.y - tuning.ground.snapDown) {
+        if (!this.contact.ground && sup.y < this.pos.y) this.pos.y = sup.y;
+        this.grounded = true;
+      } else if (!this.contact.ground) {
+        // Stepped off an edge mid-strike: the rest of it happens in the air.
+        s.air = true;
+        this.grounded = false;
+      }
+    }
+    if (s.t >= s.dur) this.endStrike();
+  }
+
+  private lungeStep(dt: number): void {
+    const s = this.strike;
+    const C = tuning.combat;
+    const dx = s.tx - this.pos.x,
+      dy = s.ty - this.pos.y,
+      dz = s.tz - this.pos.z;
+    const dh = Math.hypot(dx, dz);
+    if (dh <= s.stop + 0.05 || s.t > s.dur) {
+      this.endLunge(dh <= s.stop + 0.35);
+      return;
+    }
+    const d3 = Math.hypot(dx, s.air ? dy : 0, dz);
+    const sp = Math.min(C.lungeSpeed, ((dh - s.stop) / dh) * d3 / dt);
+    this.vel.set((dx / d3) * sp, s.air ? (dy / d3) * sp : 0, (dz / d3) * sp);
+    this.faceToward(s.tx, s.tz);
+    clearContactSummary(this.contact);
+    this.gather(dt);
+    const n = clamp(Math.ceil((sp * dt) / tuning.sim.maxSubstepMove), 1, 16);
+    const h = dt / n;
+    for (let i = 0; i < n; i++) {
+      this.pos.addScaledVector(this.vel, h);
+      clearContactSummary(this.subContact);
+      this.world.resolveCapsule(this.pos, this.vel, tuning.body.radius, tuning.body.height, this.cands, this.nCands, this.subContact);
+      this.mergeContacts();
+    }
+    if (!s.air) {
+      // A ground lunge follows the ground (curbs, steps); off an edge it continues as an air lunge.
+      const sup = this.world.supportHeight(this.pos.x, this.pos.z, this.pos.y + 0.35, 0.12);
+      if (sup.y > -Infinity && sup.y >= this.pos.y - 0.6) {
+        if (sup.y > this.pos.y || !this.contact.ground) this.pos.y = sup.y;
+      } else s.air = true;
+    }
+    // Blocked or pushed off course (a wall, a car): abort like zip.
+    const nd = Math.hypot(s.tx - this.pos.x, s.tz - this.pos.z);
+    if (s.lastDist - nd < sp * dt * 0.25) s.stall += dt;
+    else s.stall = 0;
+    s.lastDist = nd;
+    if (s.stall > 0.06) this.endLunge(nd <= s.stop + 0.35);
+  }
+
+  private endLunge(ok: boolean): void {
+    const fwdX = -Math.sin(this.facing),
+      fwdZ = -Math.cos(this.facing);
+    this.vel.set(fwdX * 2, 0, fwdZ * 2);
+    this.endStrike();
+    this.events.push({ type: 'lungeEnd', ok });
+  }
+
+  /** Out of MODE_STRIKE: onto the ground when the feet are supported, else into the air. */
+  private endStrike(): void {
+    if (this.supportedFeet()) {
+      this.vel.y = 0;
+      this.setMode(MODE_GROUND);
+      this.grounded = true;
+    } else this.setMode(MODE_AIR);
+  }
+
+  // ---------------------------------------------------------------------------
   // Post step: water, bounds, NaN guard, stuck detection
   // ---------------------------------------------------------------------------
 
   private setMode(m: number): void {
+    // Leaving a combat move cuts its animation short (it fades out).
+    if (this.mode === MODE_STRIKE && m !== MODE_STRIKE) this.endCombatAnim(CA.LUNGE, CA.TAKEDOWN);
     if (m !== MODE_GROUND) this.grounded = false;
     if (m !== MODE_SWING) {
       this.rope.attached = false;
@@ -1761,30 +2168,9 @@ export class Player {
     return !this.world.capsuleFree(p.x, p.y + 0.6, p.z, r, h);
   }
 
-  /** Find the nearest free standing position around (x, y, z). */
+  /** Find the nearest free standing position around (x, y, z) (see `physics/safeSpot.ts`). */
   findSafeSpot(x: number, y: number, z: number, out: Vector3): boolean {
-    const r = tuning.body.radius,
-      h = tuning.body.height;
-    const w = this.world;
-    const tryAt = (cx: number, cz: number, maxY: number): boolean => {
-      const s = w.supportHeight(cx, cz, maxY, 0);
-      if (s.y === -Infinity) return false;
-      if (!w.capsuleFree(cx, s.y + 0.02, cz, r + 0.05, h)) return false;
-      out.set(cx, s.y + 0.02, cz);
-      return true;
-    };
-    if (tryAt(x, z, y + 1.5)) return true;
-    const radii = [0.8, 1.6, 2.5, 4, 6, 9, 13, 18, 25, 35, 50, 70];
-    for (const rad of radii) {
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2;
-        const cx = x + Math.cos(a) * rad,
-          cz = z + Math.sin(a) * rad;
-        if (tryAt(cx, cz, y + 1.5)) return true;
-        if (tryAt(cx, cz, y + 40)) return true;
-      }
-    }
-    return false;
+    return findSafeSpot(this.world, x, y, z, out);
   }
 
   private recover(): void {

@@ -27,6 +27,9 @@ import {
   momentFrames,
   momentRoof,
   momentState,
+  touchSpot,
+  aimAt,
+  planTarget,
   type BotInput,
 } from './testDrivers';
 import { goldenDigest } from './golden';
@@ -35,6 +38,9 @@ import { landmarkTunnelTest } from './landmarkTests';
 import { mapSwitchUrl } from '../maps/select';
 import { getMap } from '../maps/registry';
 import { buildCollisionWorld } from '../world/cityCollision';
+import { makeAnchorResult } from '../player/targeting';
+import { ES_NAMES, type EnemyKind } from '../combat/types';
+import { combatComboTest, combatDodgeTest, combatLineTest, combatRoutingTest } from './combatDrivers';
 
 declare global {
   interface Window {
@@ -56,6 +62,11 @@ export function installTestApi(game: Game, app?: App): void {
       game.loop.manual = on;
       // The menu's attract mode never runs while tests step the game by hand.
       game.attractEnabled = !on;
+      // Combat stays off in manual mode unless a test enables it (combat.enable), and never spawns on its own.
+      game.combatEnabled = !on;
+      game.combatSim.scheduler = !on;
+      game.combatSim.roaming = !on;
+      if (on) game.resetCombat();
       game.playing = true;
       game.view = 'play';
       // Deterministic stepping: the UI overlay is hidden unless a test shows it.
@@ -192,6 +203,126 @@ export function installTestApi(game: Game, app?: App): void {
     },
     /** The URL a map switch reloads to. */
     mapUrl: (id: string) => mapSwitchUrl(location.href, id as Parameters<typeof mapSwitchUrl>[1]),
+    /** Touch spec: a place to measure a control (the real-time loop keeps running). */
+    touchSpot: (kind: 'avenue' | 'wall' | 'air') => touchSpot(game, kind),
+    /** Points the crosshair at the best swing anchor in view; false when there is none. */
+    aimAtAnchor(): boolean {
+      const t = makeAnchorResult();
+      if (!planTarget(game, 0, t)) return false;
+      aimAt(game, t.x, t.y, t.z);
+      return true;
+    },
+    combat: {
+      /** Turn combat on or off (manual mode starts with it off). */
+      enable(on = true): void {
+        game.combatEnabled = on;
+      },
+      /** Spawn an enemy standing at (x, z) (snapped to the support below y + 1); returns its id or -1. */
+      spawn(kind: number, x: number, y: number, z: number): number {
+        const id = game.combatSim.debugSpawn(kind as EnemyKind, x, y, z);
+        game.combatLink.sync();
+        game.combatView.update(game.combatLink.now(), game.combatLink.now());
+        return id;
+      },
+      /** Spawn `dist` m ahead of the camera on the hero's level (yaw only); returns its id or -1. */
+      spawnAhead(kind: number, dist: number, side = 0): number {
+        const p = game.player.pos;
+        const yaw = game.rig.yaw;
+        const fx = -Math.sin(yaw),
+          fz = -Math.cos(yaw);
+        return api.combat.spawn(kind, p.x + fx * dist + fz * side, p.y + 0.5, p.z + fz * dist - fx * side);
+      },
+      /** Spawn spots ([x, y, z]) of the k-th arena of a type (spawnPoints `AR`) nearest the city spawn. */
+      arenaSpots(type = 0, k = 0): Array<[number, number, number]> {
+        const sp = game.spawns;
+        const s = game.layout.spawn;
+        const ids = [...sp.byType[type]!].sort((a, b) => {
+          const A = sp.arenas[a]!,
+            B = sp.arenas[b]!;
+          return Math.hypot(A.x - s[0], A.z - s[2]) - Math.hypot(B.x - s[0], B.z - s[2]) || a - b;
+        });
+        const a = sp.arenas[ids[k]!]!;
+        const out: Array<[number, number, number]> = [];
+        for (let i = 0; i < a.spots.length; i += 3) out.push([a.spots[i]!, a.spots[i + 1]!, a.spots[i + 2]!]);
+        return out;
+      },
+      /** Enemies as this client sees them (interpolated view). */
+      enemies(): Array<Record<string, unknown>> {
+        return game.combatView.enemies.map((e) => ({
+          id: e.id,
+          kind: e.kind,
+          state: ES_NAMES[e.state],
+          pos: [e.x, e.y, e.z],
+          yaw: e.yaw,
+          hp: e.hp,
+          maxHp: e.maxHp,
+          flags: e.flags,
+          target: e.target,
+        }));
+      },
+      /** Enemies in the sim itself (authoritative positions). */
+      simEnemies(): Array<Record<string, unknown>> {
+        return game.combatSim.enemies.map((e) => ({ id: e.id, kind: e.kind, state: ES_NAMES[e.state], pos: [e.pos.x, e.pos.y, e.pos.z], hp: e.hp, flags: e.flags }));
+      },
+      /** Remove every enemy. */
+      clear(): void {
+        game.combatSim.debugClear();
+        game.combatLink.sync();
+      },
+      /** Set the hero's health (0 knocks it down at the next step). */
+      setHp(v: number): void {
+        game.combatSim.debugSetHp(game.combatLink.selfPid, v);
+        game.combatLink.sync();
+      },
+      killAll(): void {
+        game.combatSim.debugKillAll();
+        game.combatLink.sync();
+      },
+      /** Step the combat sim alone `n` times (the hero is not moved). */
+      stepSim(n = 1): void {
+        for (let i = 0; i < n; i++) game.combatLink.stepNow();
+        game.combatView.update(game.combatLink.now(), game.combatLink.renderTime());
+      },
+      startEvent: (type: 'robbery' | 'gang' | 'drones' | 'boss', x?: number, z?: number, boss?: number) => game.combatSim.startEvent(type, x, z, boss),
+      setScheduler(on: boolean): void {
+        game.combatSim.scheduler = on;
+        game.combatSim.roaming = on;
+      },
+      /** Point the crosshair at an enemy's chest. */
+      aimAt(id: number): boolean {
+        const e = game.combatView.enemy(id);
+        if (!e) return false;
+        aimAt(game, e.x, e.y + 1.1, e.z);
+        return true;
+      },
+      /** The hero's side: router counters, mode, combat animation, knocked out. */
+      hero(): Record<string, unknown> {
+        const p = game.player;
+        return { stats: { ...game.heroCombat.stats }, hud: { ...game.heroCombat.hud, threat: null }, mode: MODE_NAMES[p.mode], strike: { ...p.strike }, anim: { ...p.combatAnim }, down: p.down };
+      },
+      routingTest: () => combatRoutingTest(game),
+      comboTest: () => combatComboTest(game),
+      lineTest: () => combatLineTest(game),
+      dodgeTest: () => combatDodgeTest(game),
+      /** Own combat state and the recent combat events (room time, event). */
+      state(): Record<string, unknown> {
+        const v = game.combatView;
+        const h = game.combatSim.hero(game.combatLink.selfPid);
+        return {
+          enabled: game.combatEnabled,
+          now: game.combatLink.now(),
+          hp: v.self.hp,
+          down: v.self.down,
+          combo: v.self.combo,
+          comboUntil: v.self.comboUntil,
+          focus: v.self.focus,
+          threat: v.threat ? { ...v.threat } : null,
+          simHero: h ? { pos: [h.x, h.y, h.z], hp: h.hp, down: h.down } : null,
+          enemies: v.enemies.length,
+          events: v.recentEvents().slice(-48).map((l) => ({ time: l.time, ...l.ev })),
+        };
+      },
+    },
     simTiming(): { msPerTick: number; ticks: number } {
       return { msPerTick: game.simTimeMs / Math.max(1, game.simTicksMeasured), ticks: game.simTicksMeasured };
     },

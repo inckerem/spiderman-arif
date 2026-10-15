@@ -27,6 +27,9 @@ export interface BotInput {
   swing: boolean;
   zip: boolean;
   reel: number;
+  /** Melee attack (F) and takedown (E) held (test bots; the autopilot never fights). */
+  attack?: boolean;
+  finisher?: boolean;
 }
 
 export function emptyBotInput(): BotInput {
@@ -40,12 +43,16 @@ export function fillTickInput(out: TickInput, inp: BotInput, prev: BotInput): vo
   out.jump = inp.jump;
   out.jumpPressed = inp.jump && !prev.jump;
   out.sprint = inp.sprint;
+  out.groundSprint = false;
   out.dive = inp.dive;
   out.swing = inp.swing;
   out.swingPressed = inp.swing && !prev.swing;
   out.swingReleased = !inp.swing && prev.swing;
   out.zip = inp.zip;
   out.zipPressed = inp.zip && !prev.zip;
+  out.attack = !!inp.attack;
+  out.attackPressed = !!inp.attack && !prev.attack;
+  out.finisherPressed = !!inp.finisher && !prev.finisher;
   out.reel = inp.reel;
 }
 

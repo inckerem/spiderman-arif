@@ -1,6 +1,6 @@
 # SKYTHREAD
 
-A single-player 3D open-world web-swinging game for desktop browsers. Swing on lines shot from wrist launchers through a procedurally generated Manhattan-style city of about 1.5 x 1.5 km with a large tree-filled central park, a waterfront with piers and a bridge, live traffic and pedestrians, a dynamic day-night cycle, optional ring races and a photo mode. Everything is built in code: the city, the hero, the animation, the textures and every sound effect. The only asset file is the music track.
+A single-player 3D open-world web-swinging game for desktop and mobile browsers (on phones and tablets with on-screen touch controls). Swing on lines shot from wrist launchers through a procedurally generated Manhattan-style city of about 1.5 x 1.5 km with a large tree-filled central park, a waterfront with piers and a bridge, live traffic and pedestrians, a dynamic day-night cycle, optional ring races and a photo mode. Everything is built in code: the city, the hero, the animation, the textures and every sound effect. The only asset file is the music track.
 
 The in-game interface is in Turkish (all strings in `src/i18n/tr.ts`).
 
@@ -18,13 +18,13 @@ Clone the repository and start the launcher for your system:
 
 Nothing has to be installed first. When Node.js is missing or too old, the launcher downloads a portable Node.js 22 into `.tools/` (checked against a pinned SHA-256; no admin rights, nothing installed system-wide). It then installs the npm packages, builds the game, serves it on http://127.0.0.1:4173 and opens the default browser. The first start downloads about 100 MB and takes a few minutes. Later starts take a few seconds and rebuild only when the sources changed. The launcher window keeps the game server running; close it or press Ctrl+C to stop.
 
-Options (pass them on the command line): `--dev` (dev server with hot reload), `--no-open`, `--rebuild`, `--reinstall`, `--check` (start, check that the page is served, exit). `SKYTHREAD_NODE=portable` ignores an installed Node.js. Deleting `.tools/` removes the portable Node.js.
+Options (pass them on the command line): `--dev` (dev server with hot reload), `--no-open`, `--rebuild`, `--reinstall`, `--check` (start, check that the page is served, exit), `--sunucu` (serve with the multiplayer game server instead: the game and its rooms on one port, reachable from the local network, so phones and other computers on the same Wi-Fi can open the address the launcher prints; allow local network access if the firewall asks). `SKYTHREAD_NODE=portable` ignores an installed Node.js. Deleting `.tools/` removes the portable Node.js.
 
 A downloaded ZIP (instead of a clone) can trigger a security prompt. On macOS, run `sh BASLAT-Mac.command` in Terminal, or allow the file under System Settings > Privacy & Security. On Windows, choose "More info" and then "Run anyway".
 
 ### Manual
 
-Requirements: Node.js 22.12+ or 20.19+ (Vite 8 requires one of these; developed on 22), npm, a desktop browser with WebGL2 (current Chrome, Edge or Firefox).
+Requirements: Node.js 22.12+ or 20.19+ (Vite 8 requires one of these; developed on 22), npm, a browser with WebGL2 (current Chrome, Edge, Firefox or Safari; on phones Chrome for Android or Safari on iOS/iPadOS).
 
 ```bash
 npm install
@@ -38,7 +38,52 @@ npm run build        # type-check + bundle into dist/
 npm run preview      # http://127.0.0.1:4173
 ```
 
-Behind the main menu the hero swings through the city on autopilot, filmed by a cinematic camera that cuts between chase, side, low-angle, aerial and orbit shots (attract mode; not playable). Click **Oyna** (Play) to start: the hero begins on the spawn roof and the game captures the mouse (pointer lock). Audio starts after the first click or key press. Press `Esc` to pause; **Ana Menü** in the pause menu goes back to the attract mode. URL parameter `?seed=1234` generates a different city.
+Behind the main menu the hero swings through the city on autopilot, filmed by a cinematic camera that cuts between chase, side, low-angle, aerial and orbit shots (attract mode; not playable). Click **Oyna** (Play) to start: the hero begins on the spawn roof and the game captures the mouse (pointer lock; on phones see below). Audio starts after the first click or key press. Press `Esc` to pause; **Ana Menü** in the pause menu goes back to the attract mode. URL parameter `?seed=1234` generates a different city.
+
+### Multiplayer server (development)
+
+Multiplayer (M12) runs on a small Node.js game server in `server/` that shares the protocol and room code in `src/net/` and `src/sim/` with the client. The server, its rooms and the server-side combat (the same combat simulation as single player) are in place; the in-game multiplayer menu and remote heroes come in a later step, so the game itself still plays single player.
+
+```bash
+npm run server:test  # builds dist-server/server.mjs and runs it on 127.0.0.1:8787 (no static files, test hooks on)
+npm run dev          # the dev server proxies /ws to 127.0.0.1:8787 (SKYTHREAD_SERVER_PORT changes the target)
+npm run build && npm run build:server && npm run server   # production-style: dist/ and /ws on 0.0.0.0:8080
+```
+
+The server takes its settings from environment variables (table below) or the same names as command-line flags (`--port=8787`, `--max-players-per-room=4`, `--static=` for no static files, `--test-hooks`).
+
+## Sunucuya kurulum / Deploy
+
+One Docker container serves the built game and the multiplayer WebSocket on port 8080; Nginx in front terminates TLS on a subdomain and forwards both. The in-game interface stays Turkish; nothing here changes the language.
+
+What the server needs: a Linux machine with Docker Engine and the Compose plugin, Nginx, a DNS record (A, and AAAA if you have IPv6) for the subdomain pointing at it, and ports 80 and 443 open. The examples use the placeholder `oyun.example.com`; replace it with your subdomain everywhere.
+
+1. Get the code: `git clone <repository URL> /opt/skythread && cd /opt/skythread`.
+2. Edit `docker-compose.yml`: set `ALLOWED_ORIGINS` to your address (`https://oyun.example.com`). Change other settings from the table below if needed.
+3. Build and start: `docker compose up -d --build`. The first build takes a few minutes. Check it: `curl -f http://127.0.0.1:8080/healthz` prints `{"ok":true,...}` and `docker compose ps` shows the container as `healthy`. The port is bound to 127.0.0.1 only, so the game is not reachable from outside until Nginx forwards it.
+4. Get a TLS certificate, for example with Certbot: `sudo systemctl stop nginx && sudo certbot certonly --standalone -d oyun.example.com && sudo systemctl start nginx`. The example config serves `/.well-known/acme-challenge/` from `/var/www/certbot`, so once it is active, switch renewals to that path without stopping Nginx: `sudo mkdir -p /var/www/certbot && sudo certbot certonly --webroot -w /var/www/certbot -d oyun.example.com --force-renewal`.
+5. Install the Nginx config: `sudo cp deploy/nginx/skythread.conf /etc/nginx/sites-available/skythread.conf`, replace the domain (`sudo sed -i 's/oyun.example.com/YOUR.SUBDOMAIN/g' /etc/nginx/sites-available/skythread.conf`), enable it (`sudo ln -s /etc/nginx/sites-available/skythread.conf /etc/nginx/sites-enabled/`; on distributions without `sites-enabled`, copy it to `/etc/nginx/conf.d/` instead), then `sudo nginx -t && sudo systemctl reload nginx`. The config redirects HTTP to HTTPS, forwards `/ws` with the WebSocket upgrade headers and one-hour timeouts, and compresses the game files.
+6. Open `https://oyun.example.com`.
+
+Updating: `git pull && docker compose up -d --build`. Logs: `docker compose logs -f`. Rooms and players right now: `curl http://127.0.0.1:8080/healthz`. Stopping: `docker compose down`. The container runs as the unprivileged `node` user with a read-only file system and a 512 MB memory limit; a player whose connection drops keeps the slot for 30 s, but a container restart ends all rooms.
+
+The game also works under a path instead of a subdomain (asset paths are relative and the server accepts any path ending in `/ws`): proxy that path to the container and strip the prefix.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PORT` | `8080` | HTTP and WebSocket port |
+| `HOST` | `0.0.0.0` | Listen address (`127.0.0.1` outside Docker if only a local proxy should reach it) |
+| `STATIC_DIR` | `dist` (`/app/dist` in the image) | Built game files to serve; empty serves none (WebSocket and `/healthz` only) |
+| `MAX_PLAYERS_PER_ROOM` | `16` | Players per room; a full public room opens the next one ("#2", "#3", ...) |
+| `MAX_ROOMS` | `200` | Rooms on the server (public and private together); beyond it joins are refused as full |
+| `MAX_CONN_PER_IP` | `8` | Open WebSocket connections per client address |
+| `PRIVATE_ROOM_IDLE_S` | `60` | An empty private room is closed after this many seconds |
+| `RECONNECT_GRACE_S` | `30` | A dropped player's slot (name, health) is kept this long for a reconnect |
+| `TRUST_PROXY` | `0` (`1` in compose) | Take the client address from the last `X-Forwarded-For` hop; set it only behind your own proxy |
+| `ALLOWED_ORIGINS` | empty (any) | Comma-separated origins allowed to open the WebSocket, e.g. `https://oyun.example.com` |
+| `TEST_HOOKS` | `0` | Accept test-only debug messages; never on a public server |
+| `SIM` | `combat` | Room simulation: `combat` (enemies, health and hits) or `null` (presence only, for tests) |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` or `silent` |
 
 ## Controls
 
@@ -46,9 +91,11 @@ Behind the main menu the hero swings through the city on autopilot, filmed by a 
 | --- | --- |
 | W A S D | Move; steer while swinging |
 | Mouse | Look |
-| Left mouse (hold) | Fire a web line where the crosshair points (up to 120 m) and swing while the button is down; let go to release with a push forward and up. Held with nothing usable under the crosshair, the line fires the moment the crosshair finds a point |
-| Right mouse | Pull line: pulls you toward the aimed point, a little faster than a swing (hop or mantle at the end) |
-| Space | Jump; on a swing or pull line, cut it with the same push as letting go; wall jump |
+| Left mouse (hold) | Fire a web line where the crosshair points (up to 120 m) and swing while the button is down; let go to release with a push forward and up. Held with nothing usable under the crosshair, the line fires the moment the crosshair finds a point. **With an enemy** under the crosshair (within 12 m, 20 m in the air), within 3 m in front of you, or near you during a combo: punch and kick instead, lunging to it first (jab, cross, kick, uppercut, repeating; a click during a strike queues the next one; a downed enemy gets the ground finisher) |
+| Right mouse | Pull line: pulls you toward the aimed point, a little faster than a swing (hop or mantle at the end). **On an enemy** under the crosshair (within 35 m): a tap yanks it to you, holding 0.3 s pins it in place with web |
+| Space | Jump; on a swing or pull line, cut it with the same push as letting go; wall jump. **While an enemy's attack on you is winding up**: dodge instead (a sidestep on the ground; in the air or on a line the line stays) |
+| F | Attack: always a strike, aimed at the enemy under the crosshair or the nearest one in view (a whiff with nobody around) |
+| E | Takedown: with a full focus meter (it fills with hits), knocks out the enemy within 4 m at once |
 | Shift (hold) | Sprint on the ground; cling to and climb walls |
 | C or Q | Dive in the air (trades height for speed) |
 | Mouse wheel | Reel the line in or out while swinging |
@@ -60,6 +107,8 @@ Behind the main menu the hero swings through the city on autopilot, filmed by a 
 | Esc | Pause menu |
 | ` (backtick) | Debug and tuning panel |
 
+Combat is being built (M11): enemies do not appear in normal play yet. In a dev build (`npm run dev`), `__game.combat.spawnAhead(0, 8)` in the browser console spawns a thug 8 m ahead (`1` for a bat thug); enemies show as coloured capsules until their models arrive.
+
 These are the default keys. Every action except Esc, mouse look, the wheel, 1–4 and ` can be rebound under **Ayarlar > Tuş atamaları** (Settings > Key bindings): two keys or mouse buttons per action, saved in the browser. The controls screen and the photo panel always show the current keys, named after the player's keyboard layout (Turkish Q and F layouts included).
 
 Dive is on C/Q instead of Ctrl because Ctrl+W closes the browser tab while W is held (see `docs/DECISIONS.md`); Ctrl, Alt, Cmd/Windows, Tab and F1–F12 cannot be bound for the same reason.
@@ -67,6 +116,33 @@ Dive is on C/Q instead of Ctrl because Ctrl+W closes the browser tab while W is 
 Lines go exactly where the crosshair points (a ring of rays 2.5 degrees around it catches building edges and trunks); the crosshair lights up and a diamond marks the point when a line would hold there. Nothing usable under the crosshair means no line. The camera turns toward the travel direction while you fly fast and leave the mouse alone; switch this off under Ayarlar > Kamera otomatik takip.
 
 Costumes: **Kostüm** in the main menu or the pause menu dresses the hero in one of four suits (Kırmızı-Lacivert, Kırmızı-Altın, Siyah-Altın, Siyah-Beyaz); the pick is worn at once and saved with the settings.
+
+### Playing on a phone or tablet
+
+Phones and tablets (a touch screen as the main pointer) get on-screen controls instead of mouse and keyboard; a laptop or desktop with a touchscreen keeps mouse and keyboard. To try the game on a phone, serve it on your network and open the address shown on the phone, in landscape:
+
+```bash
+npm run dev -- --host            # or: npm run build && npm run preview -- --host
+```
+
+The launchers serve on 127.0.0.1 only, which a phone cannot reach. On a desktop, `?dokunmatik=1` in the URL forces the touch controls on (for trying them with browser device emulation) and `?dokunmatik=0` forces them off.
+
+Tap **Oyna**: play starts at once (there is no pointer lock on touch). On Android the game also switches to fullscreen; iPhone Safari has no fullscreen for pages, so the browser bars stay (adding the page to the home screen hides them). The game is landscape only: with the device held upright a "Cihazını yatay çevir" prompt covers the screen and play pauses (**Yine de oyna** dismisses it; a tablet in landscape with a narrow Split View window is never blocked). Switching apps also pauses. The first start on a touch device picks Low quality; change it under Ayarlar as usual.
+
+| Control | Action |
+| --- | --- |
+| Left thumb, anywhere on the left side | Floating stick (appears under the thumb): push a little to walk, all the way to run, to the rim (it turns amber) to sprint; steers while swinging |
+| Drag on the right side | Look (own sensitivity under Ayarlar > Dokunmatik bakış hassasiyeti; invert Y applies) |
+| AĞ (hold) | Web line and swing, exactly like holding the left mouse button; let go to release with the push (on an enemy under the crosshair: a strike, like the left button) |
+| ÇEK | Pull line (right mouse) |
+| ZIPLA | Jump, cut a line, wall jump (Space) |
+| DALIŞ (hold) | Dive (C/Q) |
+| TIRMAN (hold) | Cling to and climb walls (Shift); also sprints on the ground |
+| SALDIRI | Attack (F): strike the nearest enemy in view, lunging to it; hold 0.4 s for the takedown (E) |
+| + / − | Reel the line in or out (shown while swinging; hold to repeat) |
+| Pause (top left) | Pause menu; photo mode and the music toggle are in the pause menu |
+
+All of these work at the same time (stick, look drag, a held AĞ and a tap on ZIPLA). The crosshair and the line aiming are the same as on desktop, with a wider catch around the crosshair (4 degrees instead of 2.5). In photo mode the stick flies the camera and a drag on the right turns it. A touch also ends the rooftop moment.
 
 Tips: let go on the rising part of a swing while the crosshair pulses for a launch bonus ("MÜKEMMEL BIRAKIŞ!"); fire a line right after a dive to carry the speed into the swing. Fly through the first ring of a route (park, towers, waterfront) to start a timed run; best times are saved. After you have been playing for a while, stand still on a rooftop for five seconds (no keys, no race running) for the rooftop moment: the music starts from the top, the sky runs through dusk into night, rain sets in, the HUD gives way to letterbox bars and the camera circles the crouching hero. Any key, mouse button or a deliberate mouse movement brings everything back (rain off, the time of day where it was, unless you set the hour with 1-4, Y or the photo time slider); M and the photo key work without ending it, and photo mode can capture it.
 
@@ -98,6 +174,8 @@ The suite drives the dev build headless (Playwright + Chromium with SwiftShader)
 npm test                         # whole suite (starts the dev server if needed)
 npx playwright test tests/soak.spec.ts   # 30 simulated minutes (long)
 npm run test:quick               # smoke test only
+npm run test:server              # game server checks in Node (no browser, no dev server)
+npm run test:server:load         # server load test: 16 bots + 30 enemies in one room, then 10 rooms (about 2 min)
 ```
 
 | Test | Checks |
@@ -112,7 +190,13 @@ npm run test:quick               # smoke test only
 | h `rings.spec.ts` | Ring routes clear and reachable, race logic and best times; traffic on roads with stops and turns; pedestrians off the carriageway |
 | i `keybindings.spec.ts` | Rebinding with keys and mouse buttons (conflicts, cancel, clear, reserved keys, no click-through, arrow-key navigation), controls screen and photo panel follow the bindings, the game reacts to the new keys only, persistence and corrupt storage (including codes named like `toString`) |
 | j `attract.spec.ts` | j1: the menu autopilot runs 6 simulated minutes headless: never stuck, in water, below ground, inside geometry or NaN, little ground time, long distance, swings, pull lines, wall runs and perches; the cinematic camera never inside geometry with the hero in frame. j2: the rooftop moment never starts right after a new game on the spawn roof, then starts only after 5 s still on a roof (not on the street, not while moving, not during a race), brings music, night, rain, letterbox and the orbit camera, holds while paused (a flash goes out) and through M and mouse jitter, and a key, a deliberate mouse movement or a click (firing no line) restores the music, rain, HUD and the exact hour, while an hour key keeps its hour |
+| k `touch.spec.ts` | Mobile emulation (844x390, touch, DPR 2): touch mode and Low quality on the first run, Oyna plays without pointer lock, half a stick push walks at half run speed, a full push runs and the rim sprints, a right-side drag turns the camera (invert Y applies), AĞ held keeps a line while the stick, a look drag and a DALIŞ tap happen at once and letting go releases it, ZIPLA, DALIŞ and TIRMAN work, pushing a resting thumb counts as input, a held + lets go when the line goes, lost focus lets go of buttons and the stick, the pause button and Devam Et, portrait shows the rotate prompt and pauses (it can be dismissed; a landscape device with a tall window gets none), corrupt settings (`"x"`, `5`) are a first run (Low), menus (main, settings, controls, costume, pause) have no horizontal overflow, every button inside the screen and at least 44 px tall at 844x390 and 740x360; k2: a desktop gets no touch controls, `?dokunmatik=1` forces them |
+| `combat.spec.ts` | Combat in the page (manual stepping, combat switched on): c1 the single-player room through the local link: thugs chase, telegraph and hit the hero, a teleported hero is chased, the client view stays within one combat tick of the sim, debug capsules render, down then a roof respawn; c2 routing: a thug under the crosshair takes the left click (lunge, jab, hit; no line, also for a click shorter than a tick), an enemy off the crosshair and out of range leaves the click to the line, the line control and edge-case drivers pass unchanged with combat on, F auto-targets beside the crosshair and whiffs with nobody around; c3 the chain (jab, cross, kick, uppercut through the input buffer, combo 1-4), the ground finisher on the downed thug (KO, combo 5), the counter resets after the window, a takedown with full focus; c4 right click: a tap yanks (over 60 % of the way), a hold pins (under 0.2 m drift), no enemy: the pull line; c5 Space during a bat swing's wind-up makes it miss (no jump, no damage), without it the hit lands, an air dodge on a held line keeps the line, and with no telegraph Space cuts the line as before; poses stay finite throughout |
+| `combatSim.spec.ts` | Node, no page: spawn points and respawn roofs, import purity of the pure combat code, the sim (damage, regeneration, dodges, strikes, combo, finishers, yank, pin, validation, determinism, cost) |
 | `smoke.spec.ts` | Page loads with a clean console and no request leaves the origin |
+| `server.spec.ts` | Node only: protocol codec round trips (hero states with every block and event, enemy snapshots within 5 cm), message validation, names and the profanity filter (leetspeak, allow list, `#2` suffixes), room codes (no ambiguous characters, 10 000 unique), clock sync and interpolation, the shared Room (relay, 110 m/s sanity check, corrections and the kick, reconnect grace, shared clock, PvP gating, combat hook), RoomManager (16 per public room, overflow into #2, private codes), rate limits, sessions, and that the shared net/sim modules stay pure |
+| `serverE2e.spec.ts` | Builds and starts `dist-server/server.mjs` serving `dist/` on a free port: `/healthz`, static files and caching, raw WebSocket bots that see each other's movement, 17 bots (the 17th lands in public #2), private room by code, PvP only in private rooms, cheat correction and kick, reconnect with the token, oversize and garbage frames, connections per IP, graceful shutdown |
+| `serverCombat.spec.ts` | The built server runs the combat sim: bots spawn enemies through the test hooks, get enemy snapshots at about 15 Hz, strike (hit; `rate`, `time` and `range` rejections), take damage, go down and respawn on a roof the server accepts; PvP only in a private PvP room (Room + wire vs bare `CombatSim` hash parity is in `server.spec.ts`) |
 
 Numbers from each run are written to `test-results/*.json`. Software GL in a sandbox does not represent real GPU frame rates, so the suite measures simulation time per tick, draw calls, triangles and memory instead of FPS.
 
@@ -126,8 +210,9 @@ src/
   game.ts           composition root: loop, simulation, camera views, rendering
   config/           tuning.ts (all gameplay constants), quality.ts (render presets)
   core/             fixed-step loop, seeded RNG, math helpers
-  input/            keyboard and mouse state, rebindable key bindings
+  input/            keyboard and mouse state, rebindable key bindings, on-screen touch controls
   physics/          analytic collision world (boxes, cylinders, ellipsoids, terrain, water), grid, raycasts
+  combat/           M11 combat: pure 30 Hz sim (enemies, health, hits; also runs on the M12 server), client/ (link, view, input router), render/
   player/           player state machine, rope constraint, targeting with assist, autopilot (bot play shared by the menu and the test bots)
   camera/           spring-arm camera with collision, cinematic director (menu)
   world/            city generator, collision proxies, chunked city visuals, sky, day-night
@@ -140,8 +225,13 @@ src/
   ui/               menus, HUD, minimap, settings persistence, photo panel
   i18n/tr.ts        all in-game text (Turkish)
   debug/            tuning panel, test API and in-page test drivers
+  net/              multiplayer protocol, codec, names, maps, clock sync, interpolation (shared by client and server)
+  sim/              the shared Room (players, relay, sanity checks, clock, combat hook), map runtime
+server/             Node game server: static files, /healthz, WebSocket rooms, limits
+deploy/nginx/       example Nginx server block for a subdomain
+Dockerfile, docker-compose.yml   one-container deployment
 docs/               spec, architecture, milestones, decisions
-tests/              Playwright specs a-j, smoke, soak
+tests/              Playwright specs a-j, smoke, soak, server (Node only)
 public/audio/       theme.mp3 (the user's music track)
 ```
 

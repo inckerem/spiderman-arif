@@ -3,19 +3,26 @@ import { DEFAULT_BINDINGS, MOUSE_BUTTONS, actionsForCode, mouseCode, type Action
 
 /** Snapshot of the player's intent for one simulation tick. */
 export interface TickInput {
-  /** Strafe right (+1) / left (-1). */
+  /** Strafe right (+1) / left (-1). Keys give exactly -1, 0 or +1; the touch stick anything in between. */
   moveX: number;
-  /** Forward (+1) / back (-1). */
+  /** Forward (+1) / back (-1), analog like moveX. */
   moveY: number;
   jump: boolean;
   jumpPressed: boolean;
   sprint: boolean;
+  /** Sprint speed on the ground without the wall cling of `sprint` (the touch stick pushed to its rim). */
+  groundSprint: boolean;
   dive: boolean;
   swing: boolean;
   swingPressed: boolean;
   swingReleased: boolean;
   zip: boolean;
   zipPressed: boolean;
+  /** Melee attack held / pressed (F, the touch Saldırı button): always a strike, auto-targeted (M11). */
+  attack: boolean;
+  attackPressed: boolean;
+  /** Takedown pressed (E, a long press on Saldırı). */
+  finisherPressed: boolean;
   /** Mouse wheel notches this tick: positive reels in. */
   reel: number;
   yaw: number;
@@ -30,6 +37,10 @@ export const LOOK_ACTIVITY_PX = 140;
 /** Actions whose keys never count as activity: they work during the rooftop moment without ending it. */
 const QUIET_ACTIONS: readonly Action[] = ['music', 'photo'];
 
+function clampAxis(v: number): number {
+  return v > 1 ? 1 : v < -1 ? -1 : v;
+}
+
 export function emptyTickInput(): TickInput {
   return {
     moveX: 0,
@@ -37,12 +48,16 @@ export function emptyTickInput(): TickInput {
     jump: false,
     jumpPressed: false,
     sprint: false,
+    groundSprint: false,
     dive: false,
     swing: false,
     swingPressed: false,
     swingReleased: false,
     zip: false,
     zipPressed: false,
+    attack: false,
+    attackPressed: false,
+    finisherPressed: false,
     reel: 0,
     yaw: 0,
     pitch: 0,
@@ -56,6 +71,9 @@ export function emptyTickInput(): TickInput {
  * bindings (src/input/bindings.ts). Keys and mouse buttons share one code
  * space (`KeyW`, `Mouse0`). Edges (press/release) are latched until the next
  * simulation tick consumes them, so short taps between ticks are never lost.
+ * The on-screen touch controls (src/input/touch.ts) write into the same
+ * state: an analog stick, buttons that hold actions (with the same latched
+ * edges) and look drags added to the mouse deltas.
  */
 export class Input {
   /** Held input codes: keys and `MouseN` buttons. */
@@ -66,6 +84,14 @@ export class Input {
   /** Every bound code; their browser defaults are suppressed while playing. */
   private bound = new Set<string>();
   private wheelAcc = 0;
+  /** Actions held through on-screen buttons, with their own latched edges. */
+  private readonly virtualHeld = new Set<Action>();
+  private readonly virtualPressed = new Set<Action>();
+  private readonly virtualReleased = new Set<Action>();
+  /** Touch stick: analog axes (-1..1, dead zone applied) and the rim sprint. */
+  stickX = 0;
+  stickY = 0;
+  stickSprint = false;
   mouseDX = 0;
   mouseDY = 0;
   pointerLocked = false;
@@ -149,18 +175,21 @@ export class Input {
   }
 
   isHeld(action: Action): boolean {
+    if (this.virtualHeld.has(action)) return true;
     for (const code of this.bindings[action]) if (code !== null && this.held.has(code)) return true;
     return false;
   }
 
   private wasPressed(action: Action): boolean {
+    if (this.virtualPressed.has(action)) return true;
     for (const code of this.bindings[action]) if (code !== null && this.pressedSinceTick.has(code)) return true;
     return false;
   }
 
-  /** A bound code went up since the last tick and no other code of the action is still held. */
+  /** A bound code (or on-screen button) went up since the last tick and nothing else still holds the action. */
   private wasReleased(action: Action): boolean {
-    let released = false;
+    if (this.virtualHeld.has(action)) return false;
+    let released = this.virtualReleased.has(action);
     for (const code of this.bindings[action]) {
       if (code === null) continue;
       if (this.releasedSinceTick.has(code)) released = true;
@@ -176,23 +205,66 @@ export class Input {
     const b = on && this.isHeld('back') ? 1 : 0;
     const l = on && this.isHeld('left') ? 1 : 0;
     const r = on && this.isHeld('right') ? 1 : 0;
-    out.moveX = r - l;
-    out.moveY = f - b;
+    // Keys alone give exactly -1/0/+1; the touch stick adds its analog axes.
+    out.moveX = on ? clampAxis(r - l + this.stickX) : 0;
+    out.moveY = on ? clampAxis(f - b + this.stickY) : 0;
     out.jump = on && this.isHeld('jump');
     out.jumpPressed = on && this.wasPressed('jump');
     out.sprint = on && this.isHeld('sprint');
+    out.groundSprint = on && this.stickSprint;
     out.dive = on && this.isHeld('dive');
     out.swing = on && this.isHeld('swing');
     out.swingPressed = on && this.wasPressed('swing');
     out.swingReleased = on && this.wasReleased('swing');
     out.zip = on && this.isHeld('zip');
     out.zipPressed = on && this.wasPressed('zip');
+    out.attack = on && this.isHeld('attack');
+    out.attackPressed = on && this.wasPressed('attack');
+    out.finisherPressed = on && this.wasPressed('finisher');
     out.reel = on ? this.wheelAcc : 0;
     out.yaw = yaw;
     out.pitch = pitch;
     this.pressedSinceTick.clear();
     this.releasedSinceTick.clear();
+    this.virtualPressed.clear();
+    this.virtualReleased.clear();
     this.wheelAcc = 0;
+  }
+
+  /** An on-screen button went down: the action is held, with a press edge, like a key. */
+  pressVirtual(action: Action): void {
+    if (this.virtualHeld.has(action)) return;
+    this.virtualHeld.add(action);
+    this.virtualPressed.add(action);
+  }
+
+  /** An on-screen button went up (a press and release between two ticks still reaches the tick as a tap). */
+  releaseVirtual(action: Action): void {
+    if (this.virtualHeld.delete(action)) this.virtualReleased.add(action);
+  }
+
+  /**
+   * Touch stick axes (-1..1) and whether it is pushed to its rim (ground
+   * sprint). Leaving the dead zone counts as activity (like a key press), so a
+   * thumb resting on the stick that starts to push ends the rooftop moment.
+   */
+  setStick(x: number, y: number, sprint: boolean): void {
+    if ((x !== 0 || y !== 0) && this.stickX === 0 && this.stickY === 0) this.activity++;
+    this.stickX = x;
+    this.stickY = y;
+    this.stickSprint = sprint;
+  }
+
+  /** Look drag from the touch controls, in mouse units: it goes through the mouse-look path. */
+  addLook(dx: number, dy: number): void {
+    this.mouseDX += dx;
+    this.mouseDY += dy;
+    this.trackLook(Math.abs(dx) + Math.abs(dy));
+  }
+
+  /** Reel notches from the touch reel buttons (positive reels in, like wheel up). */
+  addReel(notches: number): void {
+    this.wheelAcc += notches;
   }
 
   consumeMouse(): { dx: number; dy: number } {
@@ -206,6 +278,10 @@ export class Input {
     this.held.clear();
     this.pressedSinceTick.clear();
     this.releasedSinceTick.clear();
+    this.virtualHeld.clear();
+    this.virtualPressed.clear();
+    this.virtualReleased.clear();
+    this.setStick(0, 0, false);
     this.wheelAcc = 0;
     this.mouseDX = 0;
     this.mouseDY = 0;
@@ -237,8 +313,11 @@ export class Input {
     if (this.held.delete(e.code)) this.releasedSinceTick.add(e.code);
   };
 
+  /** Lost focus: nothing stays held, keys or on-screen buttons and the stick (no release edges, like a pause). */
   private onBlur = (): void => {
     this.held.clear();
+    this.virtualHeld.clear();
+    this.setStick(0, 0, false);
   };
 
   private onMouseDown = (e: MouseEvent): void => {
@@ -271,14 +350,19 @@ export class Input {
     const dy = Math.abs(e.movementY) > 600 ? 0 : e.movementY;
     this.mouseDX += dx;
     this.mouseDY += dy;
+    this.trackLook(Math.abs(dx) + Math.abs(dy));
+  };
+
+  /** Look travel adds up with a 0.3 s decay; crossing LOOK_ACTIVITY_PX counts as activity. */
+  private trackLook(travel: number): void {
     const now = performance.now();
-    this.lookTravel = this.lookTravel * Math.exp(-(now - this.lookAt) / 300) + Math.abs(dx) + Math.abs(dy);
+    this.lookTravel = this.lookTravel * Math.exp(-(now - this.lookAt) / 300) + travel;
     this.lookAt = now;
     if (this.lookTravel > LOOK_ACTIVITY_PX) {
       this.lookTravel = 0;
       this.activity++;
     }
-  };
+  }
 
   private bump = (): void => {
     this.activity++;

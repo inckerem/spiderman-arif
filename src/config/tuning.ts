@@ -144,6 +144,8 @@ export const tuning = {
   /** Crosshair aim: lines go where the centre ray hits; rays this close around it catch edges. */
   aim: {
     magnetismDeg: 2.5,
+    /** Wider magnetism with touch controls: a thumb aims less precisely than a mouse. */
+    touchMagnetismDeg: 4,
   },
   /** Wide anchor search (cone around the view). Gameplay aims with the crosshair; test bots use this to pick where to look. */
   assist: {
@@ -240,6 +242,165 @@ export const tuning = {
     /** Lightning: seconds between flashes. */
     boltMin: 8,
     boltMax: 18,
+  },
+  /** On-screen touch controls (phones and tablets). */
+  touch: {
+    /** Joystick: knob travel (CSS px), dead zone and the deflection that reaches full run speed (fractions of the travel). */
+    stickRadius: 56,
+    deadZone: 0.12,
+    fullAt: 0.88,
+    /** Knob at the rim (this fraction of the travel or more): sprint on the ground. */
+    sprintAt: 0.97,
+    /** Camera turn per CSS px of look drag at sensitivity 1 (rad). */
+    lookRadPerPx: 0.0055,
+    /** Held reel buttons repeat a wheel notch at this interval (s). */
+    reelRepeat: 0.16,
+  },
+  /** Hero combat (M11). Read by the pure combat sim (30 Hz) and, from chunk 4, the hero's input router. */
+  combat: {
+    maxHp: 100,
+    /** Regeneration starts this long after the last damage, then heals regenRate hp/s. */
+    regenDelay: 5,
+    regenRate: 12,
+    /** Knocked out for this long, then respawn on a roof. */
+    downTime: 4,
+    /** Respawn roof search: distance ring (m) and roof height band (m). */
+    respawnRoofMin: 40,
+    respawnRoofMax: 180,
+    respawnRoofMinY: 12,
+    respawnRoofMaxY: 80,
+    /** Any enemy this close in the front arc takes the left click. */
+    closeRange: 3,
+    closeArcDeg: 220,
+    /** Crosshair cone for a lunge target. */
+    coneDeg: 9,
+    lungeRangeGround: 12,
+    lungeRangeAir: 20,
+    freeflowRange: 10,
+    freeflowConeDeg: 120,
+    lungeSpeed: 24,
+    lungeMaxTime: 0.45,
+    /** Hand/foot to enemy capsule surface at contact. */
+    reach: 1.6,
+    /** Time after a hit that keeps the chain (and the counter) alive. */
+    comboWindow: 1.1,
+    inputBuffer: 0.25,
+    /** Chain moves: contact time, recovery, damage. The chain cycles jab, cross, kick, upper. */
+    jabContact: 0.1,
+    jabRecover: 0.22,
+    jabDmg: 10,
+    crossContact: 0.1,
+    crossRecover: 0.22,
+    crossDmg: 12,
+    kickContact: 0.14,
+    kickRecover: 0.28,
+    kickDmg: 15,
+    upperContact: 0.16,
+    upperRecover: 0.34,
+    upperDmg: 20,
+    /** The 4th hit of a chain knocks back (m/s) and down. */
+    chainKnockback: 5,
+    airStrikeDmg: 14,
+    airHang: 0.35,
+    airHangGravity: 0.2,
+    /** Left click on a DOWN enemy this close. KOs regular enemies. */
+    groundFinisherDmg: 40,
+    groundFinisherRange: 3,
+    focusPerHit: 12,
+    takedownCost: 100,
+    takedownRange: 4,
+    /** A takedown on a boss removes this fraction of its max hp. */
+    takedownBossFrac: 0.15,
+    yankDmg: 5,
+    yankRange: 35,
+    yankConeDeg: 6,
+    /** Yanked enemies fly toward the hero for this long and stop this far from it. */
+    yankTime: 0.35,
+    yankStop: 1.6,
+    /** Right button held this long on an enemy pins it, for pinTime. */
+    pinHold: 0.3,
+    pinTime: 4,
+    dodgeIframes: 0.4,
+    dodgeLookahead: 0.8,
+    dodgeSpeed: 9,
+    dodgeTime: 0.25,
+    hitStun: 0.25,
+    knockdownTime: 0.8,
+    /** Server-side checks (same in single player): strike spacing, extra reach, intent rate (per s). */
+    minStrikeInterval: 0.15,
+    lagTolerance: 1.2,
+    maxIntentRate: 15,
+    /** Intent time stamps must lie in [now - viewPast, now + viewFuture]. */
+    viewPast: 0.4,
+    viewFuture: 0.05,
+    /** Hero position in an intent must be this close to the extrapolated last sample. */
+    heroPosTolerance: 4,
+    /** Hero samples are extrapolated at most this far ahead. */
+    heroExtrapolate: 0.15,
+    /** Late hit resolution for online heroes: clamp(RTT / 2 + graceBase, 0, graceMax). */
+    graceBase: 0.05,
+    graceMax: 0.2,
+  },
+  /** Enemy behaviour (shared) and per-kind stats: hp, speed (m/s), damage, telegraph (wind-up, s), cooldown (s), range (m). */
+  enemies: {
+    /** Target search: nearest valid hero within this range with line of sight, re-checked every `retarget` s. */
+    aggroRange: 40,
+    loseRange: 60,
+    retarget: 0.5,
+    /** Reaction after spotting a hero. */
+    alertTime: 0.35,
+    /** At most this many melee attackers per hero; the others circle at circleMin-circleMax. */
+    maxMeleeAttackers: 2,
+    circleMin: 4,
+    circleMax: 6,
+    /** Enemies keep this far apart. */
+    separation: 1.2,
+    /** Arena leash: the arena rectangle plus this margin. */
+    leashMargin: 8,
+    /** A fall higher than this KOs. */
+    fallKo: 6,
+    /** KO'd enemies stay this long, then the slot is recycled. */
+    koLinger: 4,
+    gravity: 22,
+    accel: 30,
+    thug: { hp: 60, speed: 4.5, damage: 8, telegraph: 0.45, cooldown: 1.2, range: 1.6, knockback: 2, bottleDamage: 6, bottleMinAbove: 3, bottleRange: 15 },
+    bat: { hp: 70, speed: 4.2, damage: 14, telegraph: 0.6, cooldown: 1.6, range: 2.1, knockback: 6 },
+    gunman: { hp: 50, speed: 3.5, damage: 6, telegraph: 0.7, cooldown: 2, range: 60, burst: 3, burstGap: 0.12, keepMin: 12, keepMax: 25 },
+    brute: { hp: 180, speed: 3.2, damage: 22, telegraph: 0.9, cooldown: 2.2, range: 2.4, chargeDamage: 18, chargeSpeed: 12, backArcDeg: 110, aboveHeight: 1.2, pinStun: 1.5 },
+    drone: { hp: 30, speed: 10, damage: 7, telegraph: 0.6, cooldown: 2, range: 25, boltSpeed: 25, orbitRadius: 8, orbitHeight: 5 },
+    kocbasi: { hp: 1200, speed: 5, damage: 30, telegraph: 1.2, cooldown: 2.5, range: 3, frontArmor: 0.2, chargeSpeed: 22, stompRadius: 6, stompDamage: 15, wallStun: 3, phase2: 0.5 },
+    kuzgun: { hp: 900, speed: 12, damage: 20, telegraph: 1, cooldown: 2.5, range: 30, flyMin: 15, flyMax: 30, darts: 5, dartDamage: 6, pinsToDrop: 2, groundStun: 4, adds: 3 },
+    diken: { hp: 1000, speed: 5, damage: 10, telegraph: 0.7, cooldown: 2, range: 2.6, clawChain: 3, tailDamage: 25, poisonDps: 2, poisonTime: 4, tailStuck: 2, yankStun: 1.5 },
+  },
+  /** Crime events and roaming patrols (M11 chunk 7). */
+  events: {
+    /** First event after this much play, at distMin-distMax m from the hero (also the range for later ones). */
+    firstDelay: 20,
+    distMin: 250,
+    distMax: 700,
+    /** Gap after an event ends before the next one starts. */
+    gapMin: 45,
+    gapMax: 75,
+    concurrentSp: 2,
+    /** Online: min(concurrentMp, 1 + floor(players / playersPerExtra)). */
+    concurrentMp: 3,
+    playersPerExtra: 4,
+    /** Every n-th cleared event is a boss. */
+    bossEvery: 4,
+    /** An event expires after this long when no hero came within expireRadius. */
+    expireAfter: 240,
+    expireRadius: 150,
+    roamMin: 4,
+    roamMax: 6,
+    /** Roaming pairs patrol within roamRadius of a hero, spawn beyond roamSpawnMin from every hero and despawn beyond roamDespawn. */
+    roamRadius: 250,
+    roamSpawnMin: 120,
+    roamDespawn: 350,
+    maxEnemiesSp: 30,
+    maxEnemiesMp: 60,
+    /** Online: enemies replicated per client (nearest) and their radius. */
+    replicateMax: 30,
+    replicateRadius: 300,
   },
 };
 
@@ -339,6 +500,7 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'wall.stick': [0, 10, 0.1],
   'wall.letGoPush': [0, 10, 0.1],
   'aim.magnetismDeg': [0, 8, 0.1],
+  'aim.touchMagnetismDeg': [0, 10, 0.1],
   'assist.range': [20, 120, 1],
   'assist.minDistance': [0, 30, 0.5],
   'assist.idealDistance': [10, 80, 0.5],
@@ -408,19 +570,148 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'moment.orbitSpeed': [0, 1, 0.01],
   'moment.boltMin': [2, 60, 0.5],
   'moment.boltMax': [2, 90, 0.5],
+  'touch.stickRadius': [30, 120, 1],
+  'touch.deadZone': [0, 0.5, 0.01],
+  'touch.fullAt': [0.3, 1, 0.01],
+  'touch.sprintAt': [0.5, 1, 0.01],
+  'touch.lookRadPerPx': [0.001, 0.02, 0.0005],
+  'touch.reelRepeat': [0.05, 0.6, 0.01],
+  'combat.maxHp': [10, 500, 1],
+  'combat.regenDelay': [0, 30, 0.5],
+  'combat.regenRate': [0, 100, 1],
+  'combat.downTime': [0.5, 15, 0.1],
+  'combat.respawnRoofMin': [0, 200, 1],
+  'combat.respawnRoofMax': [20, 400, 1],
+  'combat.respawnRoofMinY': [0, 60, 1],
+  'combat.respawnRoofMaxY': [10, 200, 1],
+  'combat.closeRange': [0.5, 8, 0.1],
+  'combat.closeArcDeg': [30, 360, 5],
+  'combat.coneDeg': [1, 30, 0.5],
+  'combat.lungeRangeGround': [2, 40, 0.5],
+  'combat.lungeRangeAir': [2, 50, 0.5],
+  'combat.freeflowRange': [2, 30, 0.5],
+  'combat.freeflowConeDeg': [10, 360, 5],
+  'combat.lungeSpeed': [5, 60, 0.5],
+  'combat.lungeMaxTime': [0.1, 2, 0.01],
+  'combat.reach': [0.5, 4, 0.05],
+  'combat.comboWindow': [0.2, 4, 0.05],
+  'combat.inputBuffer': [0, 1, 0.01],
+  'combat.jabContact': [0.02, 0.5, 0.01],
+  'combat.jabRecover': [0.05, 1, 0.01],
+  'combat.jabDmg': [0, 100, 1],
+  'combat.crossContact': [0.02, 0.5, 0.01],
+  'combat.crossRecover': [0.05, 1, 0.01],
+  'combat.crossDmg': [0, 100, 1],
+  'combat.kickContact': [0.02, 0.5, 0.01],
+  'combat.kickRecover': [0.05, 1, 0.01],
+  'combat.kickDmg': [0, 100, 1],
+  'combat.upperContact': [0.02, 0.5, 0.01],
+  'combat.upperRecover': [0.05, 1, 0.01],
+  'combat.upperDmg': [0, 100, 1],
+  'combat.chainKnockback': [0, 20, 0.5],
+  'combat.airStrikeDmg': [0, 100, 1],
+  'combat.airHang': [0, 2, 0.01],
+  'combat.airHangGravity': [0, 1, 0.01],
+  'combat.groundFinisherDmg': [0, 200, 1],
+  'combat.groundFinisherRange': [0.5, 8, 0.1],
+  'combat.focusPerHit': [0, 100, 1],
+  'combat.takedownCost': [0, 100, 1],
+  'combat.takedownRange': [0.5, 10, 0.1],
+  'combat.takedownBossFrac': [0, 1, 0.01],
+  'combat.yankDmg': [0, 50, 1],
+  'combat.yankRange': [5, 80, 1],
+  'combat.yankConeDeg': [1, 30, 0.5],
+  'combat.yankTime': [0.05, 1.5, 0.01],
+  'combat.yankStop': [0.5, 5, 0.1],
+  'combat.pinHold': [0.05, 1.5, 0.01],
+  'combat.pinTime': [0.5, 15, 0.1],
+  'combat.dodgeIframes': [0, 1.5, 0.01],
+  'combat.dodgeLookahead': [0.1, 2, 0.05],
+  'combat.dodgeSpeed': [0, 30, 0.5],
+  'combat.dodgeTime': [0.05, 1, 0.01],
+  'combat.hitStun': [0, 2, 0.01],
+  'combat.knockdownTime': [0, 4, 0.05],
+  'combat.minStrikeInterval': [0, 1, 0.01],
+  'combat.lagTolerance': [0, 5, 0.05],
+  'combat.maxIntentRate': [1, 60, 1],
+  'combat.viewPast': [0, 2, 0.01],
+  'combat.viewFuture': [0, 0.5, 0.01],
+  'combat.heroPosTolerance': [0.5, 20, 0.1],
+  'combat.heroExtrapolate': [0, 1, 0.01],
+  'combat.graceBase': [0, 0.3, 0.005],
+  'combat.graceMax': [0, 0.5, 0.005],
+  'enemies.aggroRange': [5, 150, 1],
+  'enemies.loseRange': [10, 200, 1],
+  'enemies.retarget': [0.1, 3, 0.05],
+  'enemies.alertTime': [0, 2, 0.01],
+  'enemies.maxMeleeAttackers': [1, 8, 1],
+  'enemies.circleMin': [1, 15, 0.1],
+  'enemies.circleMax': [1, 20, 0.1],
+  'enemies.separation': [0, 4, 0.05],
+  'enemies.leashMargin': [0, 50, 1],
+  'enemies.fallKo': [1, 40, 0.5],
+  'enemies.koLinger': [0, 20, 0.5],
+  'enemies.gravity': [5, 50, 0.5],
+  'enemies.accel': [1, 100, 1],
+  'events.firstDelay': [0, 300, 1],
+  'events.distMin': [0, 1000, 10],
+  'events.distMax': [50, 1500, 10],
+  'events.gapMin': [0, 600, 1],
+  'events.gapMax': [0, 600, 1],
+  'events.concurrentSp': [1, 6, 1],
+  'events.concurrentMp': [1, 8, 1],
+  'events.playersPerExtra': [1, 16, 1],
+  'events.bossEvery': [1, 20, 1],
+  'events.expireAfter': [10, 900, 5],
+  'events.expireRadius': [10, 500, 5],
+  'events.roamMin': [0, 20, 1],
+  'events.roamMax': [0, 20, 1],
+  'events.roamRadius': [50, 600, 10],
+  'events.roamSpawnMin': [0, 400, 10],
+  'events.roamDespawn': [50, 800, 10],
+  'events.maxEnemiesSp': [0, 60, 1],
+  'events.maxEnemiesMp': [0, 120, 1],
+  'events.replicateMax': [1, 60, 1],
+  'events.replicateRadius': [50, 1000, 10],
 };
+
+// Per-kind enemy stats share one set of ranges per stat name (`enemies.<kind>.<stat>`).
+{
+  const statRanges: Record<string, [number, number, number]> = {
+    hp: [1, 5000, 1],
+    speed: [0, 40, 0.1],
+    damage: [0, 100, 1],
+    telegraph: [0.05, 3, 0.01],
+    cooldown: [0, 10, 0.05],
+    range: [0.5, 100, 0.1],
+  };
+  const kinds = tuning.enemies as unknown as Record<string, unknown>;
+  for (const kind of Object.keys(kinds)) {
+    const stats = kinds[kind];
+    if (typeof stats !== 'object' || stats === null) continue;
+    for (const [stat, v] of Object.entries(stats as Record<string, number>)) {
+      const r = statRanges[stat];
+      tuningMeta[`enemies.${kind}.${stat}`] = r ?? [0, Math.max(1, Math.abs(v) * 4), v % 1 === 0 ? 1 : 0.01];
+    }
+  }
+}
 
 /** Deep copy of the shipped values so the debug panel can reset. */
 export const tuningDefaults: Tuning = JSON.parse(JSON.stringify(tuning)) as Tuning;
 
-export function resetTuning(): void {
-  const src = tuningDefaults as unknown as Record<string, Record<string, number>>;
-  const dst = tuning as unknown as Record<string, Record<string, number>>;
-  for (const group of Object.keys(src)) {
-    for (const key of Object.keys(src[group]!)) {
-      dst[group]![key] = src[group]![key]!;
-    }
+type TuningNode = { [key: string]: number | TuningNode };
+
+/** Copy numbers from src into dst, recursing into sub-groups (`enemies.<kind>`), never sharing objects. */
+function copyTuning(src: TuningNode, dst: TuningNode): void {
+  for (const key of Object.keys(src)) {
+    const v = src[key]!;
+    if (typeof v === 'number') dst[key] = v;
+    else copyTuning(v, dst[key] as TuningNode);
   }
+}
+
+export function resetTuning(): void {
+  copyTuning(tuningDefaults as unknown as TuningNode, tuning as unknown as TuningNode);
 }
 
 export const DEG = Math.PI / 180;

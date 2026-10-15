@@ -9,15 +9,38 @@ import type { Action } from './input/bindings';
 import { RooftopMoment } from './extras/rooftopMoment';
 import { tuning } from './config/tuning';
 import { DEFAULT_MAP, type MapId } from './maps/ids';
+import { TouchControls, detectTouchMode, type TouchButtonHandler } from './input/touch';
 
 export type AppState = 'loading' | 'menu' | 'playing' | 'paused' | 'photo';
 
 const WATER_SAMPLES = 10;
+/** Holding the touch Saldırı button this long also sends the takedown (E). */
+const ATTACK_LONG_PRESS_MS = 400;
+/** The rotate prompt needs a viewport this much taller than wide (a near-square window, such as a foldable's, plays on). */
+const UPRIGHT_ASPECT = 1.2;
+
+/**
+ * The device is held upright with a clearly tall view. A device in landscape
+ * never is, whatever the shape of its window (Split View, multi-window).
+ */
+function deviceUpright(): boolean {
+  if (window.innerHeight <= window.innerWidth * UPRIGHT_ASPECT) return false;
+  try {
+    const type = screen.orientation?.type;
+    if (type) return type.startsWith('portrait');
+  } catch {
+    // No Screen Orientation API (older iOS): the viewport shape decides.
+  }
+  return true;
+}
 
 /**
  * Application shell: owns the UI, the audio engine and the game, and runs
  * the screen flow loading -> main menu -> playing <-> paused / photo mode.
- * Pointer lock gates play; losing it (Esc, alt-tab) pauses.
+ * On desktop, pointer lock gates play; losing it (Esc, alt-tab) pauses. On
+ * touch devices (src/input/touch.ts) play starts without a lock, with the
+ * on-screen controls; a hidden page, the pause button or turning the device
+ * to portrait (which shows a rotate prompt) pauses.
  */
 export class App {
   state: AppState = 'loading';
@@ -62,9 +85,39 @@ export class App {
   private warnTimer = 0;
   private photoReturn: 'playing' | 'paused' = 'playing';
   private photoTimePaused = false;
+  /** Touch device: on-screen controls instead of pointer lock (fixed at start-up). */
+  readonly touchMode: boolean;
+  /** The on-screen controls (touch mode only). */
+  touch: TouchControls | null = null;
+  /** Touch mode held in portrait: rotate prompt shown, play paused. */
+  private portrait = false;
+  /** The player chose to play upright anyway (until the device turns to landscape). */
+  private portraitDismissed = false;
+  /** Touch Saldırı: shown while combat runs; held since (ms, -1 up); the long-press takedown already sent. */
+  private attackShown = false;
+  private attackDownAt = -1;
+  private finisherSent = false;
+  private attackHandler: TouchButtonHandler | null = null;
 
   constructor(private readonly canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
-    this.ui = new UI(uiRoot);
+    this.touchMode = detectTouchMode();
+    this.ui = new UI(uiRoot, { touch: this.touchMode });
+    if (this.touchMode) {
+      this.ui.onDismissRotate = () => {
+        this.portraitDismissed = true;
+        this.checkOrientation();
+      };
+      // From the loading screen on: portrait shows the rotate prompt.
+      const check = (): void => this.checkOrientation();
+      window.addEventListener('resize', check);
+      window.addEventListener('orientationchange', check);
+      try {
+        screen.orientation?.addEventListener('change', check);
+      } catch {
+        // No Screen Orientation API: resize and orientationchange cover it.
+      }
+      this.checkOrientation();
+    }
     this.audio = new AudioEngine(`${import.meta.env.BASE_URL}audio/theme.mp3`);
   }
 
@@ -74,6 +127,12 @@ export class App {
     const game = this.game;
     await game.init();
     ui.setLayout(game.layout);
+    if (this.touchMode) {
+      this.touch = new TouchControls(game.input);
+      ui.mountTouch(this.touch.el);
+      // A thumb aims less precisely than a mouse: wider crosshair magnetism.
+      game.player.targeting.touchAim = true;
+    }
     this.moment = new RooftopMoment(game);
     this.applySettings(ui.settings);
     this.wire();
@@ -118,11 +177,65 @@ export class App {
     game.input.onAction((action, e) => this.onAction(action, e));
     window.addEventListener('keydown', (e) => this.onKey(e));
     this.canvas.addEventListener('click', () => {
-      if (this.state === 'playing' || this.state === 'photo') game.input.requestLock();
+      if (!this.touchMode && (this.state === 'playing' || this.state === 'photo')) game.input.requestLock();
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.state === 'playing') this.pause();
     });
+    ui.onPhoto = () => this.enterPhoto();
+    ui.onMusic = () => this.toggleMusic();
+    if (this.touch) this.wireTouch(this.touch, unlock);
+  }
+
+  private wireTouch(touch: TouchControls, unlock: () => void): void {
+    touch.onPause = () => this.pause();
+    // Touch input grants audio activation on release (iOS Safari): retry the unlock there.
+    window.addEventListener('pointerup', unlock, true);
+    window.addEventListener('touchend', unlock, true);
+    // iOS Safari ignores user-scalable=no: block pinch zoom gestures.
+    document.addEventListener('gesturestart', (e) => e.preventDefault());
+  }
+
+  /**
+   * Touch mode is landscape only: a device held upright shows the rotate
+   * prompt and pauses play. The device orientation decides, not the window:
+   * a landscape tablet in Split View or Android multi-window can give the
+   * page a tall, narrow window and must never be locked out. Without the
+   * Screen Orientation API (older iOS) a clearly tall viewport counts as
+   * upright. The prompt can be dismissed ("Yine de oyna"); that holds until
+   * the device turns to landscape again.
+   */
+  private checkOrientation(): void {
+    const upright = deviceUpright();
+    if (!upright) this.portraitDismissed = false;
+    const portrait = upright && !this.portraitDismissed;
+    if (portrait === this.portrait) return;
+    this.portrait = portrait;
+    this.ui.setPortrait(portrait);
+    if (portrait && this.state === 'playing') this.pause();
+  }
+
+  /** Fullscreen hides the browser bars (Android); iPhone Safari has no element fullscreen. Failures are ignored. */
+  private enterFullscreen(): void {
+    const root = document.documentElement;
+    if (document.fullscreenElement || typeof root.requestFullscreen !== 'function') return;
+    try {
+      root
+        .requestFullscreen({ navigationUI: 'hide' })
+        .then(() => {
+          const o = screen.orientation as (ScreenOrientation & { lock?: (o: string) => Promise<void> }) | undefined;
+          return o?.lock?.('landscape');
+        })
+        .catch(() => undefined);
+    } catch {
+      // Not allowed here; play goes on in the browser window.
+    }
+  }
+
+  private toggleMusic(): void {
+    const muted = this.audio.toggleMusic();
+    this.ui.setMusicOn(!muted);
+    this.ui.toast(muted ? tr.hud.musicOff : tr.hud.musicOn);
   }
 
   // ------------------------------------------------------------------ flow
@@ -157,6 +270,7 @@ export class App {
     game.playing = false;
     game.input.enabled = false;
     game.input.clearAll();
+    this.touch?.setView('off');
     this.ui.showClickToResume(false);
     this.ui.setHudVisible(false);
     this.ui.showPause();
@@ -177,9 +291,22 @@ export class App {
     this.audio.setMenuMode(true);
   }
 
-  /** Request pointer lock; play starts once it is granted (the click-to-resume hint covers refusals). */
+  /** Request pointer lock; play starts once it is granted (the click-to-resume hint covers refusals). Touch play starts at once. */
   private lockForPlay(): void {
     const game = this.game;
+    if (this.touchMode) {
+      if (this.portrait) {
+        this.pause();
+        return;
+      }
+      game.input.clearAll();
+      game.input.enabled = true;
+      game.playing = true;
+      this.ui.showClickToResume(false);
+      this.touch?.setView('play');
+      this.enterFullscreen();
+      return;
+    }
     if (document.pointerLockElement === this.canvas) {
       this.onLock(true);
       return;
@@ -263,11 +390,9 @@ export class App {
     if (e.target instanceof HTMLInputElement && action !== 'photo' && action !== 'music') return;
     const game = this.game;
     switch (action) {
-      case 'music': {
-        const muted = this.audio.toggleMusic();
-        this.ui.toast(muted ? tr.hud.musicOff : tr.hud.musicOn);
+      case 'music':
+        this.toggleMusic();
         break;
-      }
       case 'photo':
         if (this.state === 'photo') this.exitPhoto();
         else this.enterPhoto();
@@ -303,6 +428,10 @@ export class App {
     game.resize();
     game.rig.fovOffset = s.fovOffset;
     game.rig.sensitivity = s.sensitivity;
+    if (this.touch) {
+      this.touch.lookSensitivity = s.touchSensitivity;
+      this.touch.mouseSensitivity = s.sensitivity;
+    }
     game.rig.invertY = s.invertY;
     game.rig.autoFollow = s.cameraFollow;
     game.dayNight.dayLengthMinutes = s.dayLengthMinutes;
@@ -407,6 +536,13 @@ export class App {
       ui.updateMinimap(pl.pos.x, pl.pos.z, game.rig.yaw, this.minimapRings);
     }
     ui.updateHud(hud);
+    const touch = this.touch;
+    if (touch) {
+      touch.setView(this.state === 'playing' && game.playing ? 'play' : this.state === 'photo' ? 'photo' : 'off');
+      touch.setSwinging(this.state === 'playing' && pl.mode === MODE_SWING && pl.rope.attached);
+      this.updateAttackButton(touch);
+      touch.update(dt);
+    }
     // Audio listener: the hero on screen (in the menu, the attract hero).
     const L = this.listener;
     const ap = this.state === 'menu' ? game.attract.player : pl;
@@ -444,6 +580,36 @@ export class App {
         this.musicWarned = true;
         ui.toast(tr.warnings.musicMissing);
       }
+    }
+  }
+
+  /**
+   * Touch Saldırı (M11): shown while combat runs. A press is F (`attack`:
+   * always a strike, auto-targeting the nearest enemy in view); holding it
+   * 0.4 s also sends E (`finisher`, the takedown).
+   */
+  private updateAttackButton(touch: TouchControls): void {
+    const input = this.game.input;
+    const want = this.game.combatEnabled;
+    if (want !== this.attackShown) {
+      this.attackShown = want;
+      this.attackHandler ??= {
+        press: () => {
+          input.pressVirtual('attack');
+          this.attackDownAt = performance.now();
+          this.finisherSent = false;
+        },
+        release: () => {
+          input.releaseVirtual('attack');
+          this.attackDownAt = -1;
+        },
+      };
+      touch.setAttackHandler(want ? this.attackHandler : null);
+    }
+    if (this.attackDownAt >= 0 && !this.finisherSent && performance.now() - this.attackDownAt >= ATTACK_LONG_PRESS_MS) {
+      this.finisherSent = true;
+      input.pressVirtual('finisher');
+      input.releaseVirtual('finisher');
     }
   }
 
