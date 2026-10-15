@@ -214,7 +214,7 @@ export class SwingBrain {
         ay = p.y + tuning.body.ropeOffset - rope.anchor.y,
         az = p.z - rope.anchor.z;
       const ang = (Math.acos(Math.max(-1, Math.min(1, -ay / (Math.hypot(ax, ay, az) || 1)))) * 180) / Math.PI;
-      const wantAngle = p.y < 30 ? 38 : 18;
+      const wantAngle = p.y - this.pilot.player.world.terrain.baseHeight(p.x, p.z) < 30 ? 38 : 18;
       const goodNow = rope.goodWindow && ang >= wantAngle;
       if (rope.attached && (goodNow || (past && v.y > 0 && this.stateT > 0.8) || this.stateT > 3.2)) {
         if (rope.goodWindow) this.goodReleases++;
@@ -233,7 +233,7 @@ export class SwingBrain {
         this.fire = false;
       } else if (this.state === 'fly') {
         // Re-attach once falling, or right away when close to the ground.
-        this.fire = (pl.vel.y < -0.5 && this.stateT > 0.12) || (p.y < 4 && pl.vel.y < 2) || this.stateT > 1.4;
+        this.fire = (pl.vel.y < -0.5 && this.stateT > 0.12) || (p.y - pl.world.terrain.baseHeight(p.x, p.z) < 4 && pl.vel.y < 2) || this.stateT > 1.4;
         if (pl.mode === MODE_GROUND) this.state = 'run';
       } else {
         // On the ground: run and try to swing.
@@ -499,7 +499,7 @@ export class Autopilot {
       }
     }
     // Falling toward water (the pond, the river): grab the next line now, or pull out to the shore.
-    if (pl.mode === MODE_AIR && pl.vel.y < 0 && p.y < 14 && !b.prev.swing && !b.prev.zip && this.overWaterAhead()) {
+    if (pl.mode === MODE_AIR && pl.vel.y < 0 && p.y - this.world.terrain.baseHeight(p.x, p.z) < 14 && !b.prev.swing && !b.prev.zip && this.overWaterAhead()) {
       if (!b.pressAt(0) && pl.zipCooldown <= 0 && b.pressAt(1)) this.stats.zips++;
       b.fire = false;
     }

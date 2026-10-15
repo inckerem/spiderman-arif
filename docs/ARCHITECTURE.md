@@ -56,7 +56,7 @@ All static colliders are analytic primitives stored in typed arrays:
 - **Box** (axis-aligned): building tiers, parapets, podiums, rooftop HVAC, piers, bridge deck and towers, benches, parked cars, park walls, railings.
 - **Vertical cylinder**: tree trunks, lamp posts, hydrants, antennas, water tanks, bridge pylons.
 - **Ellipsoid** (vertical axis of revolution): tree canopies.
-- **Terrain**: a height function, not geometry. Roads are at y = 0, blocks (sidewalks, plazas, park) at y = 0.15, water surface at y = -1.2 outside the island and in the pond.
+- **Terrain**: a height function behind the `TerrainModel` interface (`physics/terrain.ts`), not geometry. `baseHeight(x, z)` is the road level and `height(x, z)` the walkable ground (road level on roads, plus the 0.15 m curb elsewhere). `FlatGridTerrain` (Manhattan) has roads at y = 0, blocks (sidewalks, plazas, park) at y = 0.15 and the water surface at y = -1.2 outside the island and in the pond. The raycast asks the terrain for its own hit (`rayIntersect`, which also reports water and the surface normal) and the water respawn asks it for the nearest dry spot (`nearestLand`). Height checks in targeting and the autopilot use the altitude above `baseHeight`, which is the absolute height on the flat map.
 
 Each collider carries flags: `anchorable`, `climbable` (building facades, bridge towers), `cameraBlocks` (false for thin props so the camera does not pop on lamp posts), surface type (concrete, metal, wood, grass, foliage, glass) for footsteps.
 

@@ -1,5 +1,5 @@
 import type { Rng } from '../../core/rng';
-import { Terrain } from '../../physics/terrain';
+import { FlatGridTerrain, type TerrainModel } from '../../physics/terrain';
 import type { CityLayout } from '../../world/types';
 import { WP_PARK, WP_ROOF, WP_WATERFRONT, type MapDefinition, type RingRouteSpec, type Waypoint, type XZ } from '../types';
 import { addManhattanColliders } from './colliders';
@@ -8,7 +8,7 @@ import { generateCity } from './gen';
 /** Maximum points of an autopilot leg on the grid (with pond detours). */
 const ROUTE_CAP = 7;
 
-function waypoints(L: CityLayout, t: Terrain): Waypoint[] {
+function waypoints(L: CityLayout, t: TerrainModel): Waypoint[] {
   const out: Waypoint[] = [];
   for (const b of L.buildings) {
     const v = b.volumes[b.volumes.length - 1]!;
@@ -199,7 +199,7 @@ export const MANHATTAN: MapDefinition = {
   defaultSeed: 1337,
   collisionExtent: { minX: -1300, minZ: -1150, maxX: 1300, maxZ: 1150 },
   generate: generateCity,
-  createTerrain: (L) => new Terrain(L),
+  createTerrain: (L) => new FlatGridTerrain(L),
   addColliders: addManhattanColliders,
   testSpots: {
     // Street level anywhere on the island.

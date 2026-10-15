@@ -196,6 +196,7 @@ export class Player {
   stats = { recoveries: 0, splashes: 0, nanResets: 0, stuckEvents: 0, maxStuckTime: 0 };
   private readonly lastGood = new Vector3();
   private readonly lastGoodVel = new Vector3();
+  private readonly landSpot = { x: 0, z: 0 };
 
   constructor(
     readonly world: CollisionWorld,
@@ -1807,26 +1808,13 @@ export class Player {
   private respawnFromWater(): void {
     const L = this.layout;
     const p = this.pos;
-    let tx: number, tz: number;
+    // Nearest dry spot (pond bank, shore), then a free spot at the road level there.
     const terr = this.world.terrain;
-    if (terr.inPark(p.x, p.z) && terr.inPond(p.x, p.z)) {
-      const pd = L.pond;
-      const dx = (p.x - pd.cx) / pd.rx,
-        dz = (p.z - pd.cz) / pd.rz;
-      const k = Math.hypot(dx, dz) || 1;
-      tx = pd.cx + (dx / k) * (pd.rx + 5);
-      tz = pd.cz + (dz / k) * (pd.rz + 5);
-    } else {
-      // Nearest point on the island promenade (or the islet).
-      const isl = L.islet;
-      const dIslet = Math.hypot(Math.max(isl.minX - p.x, 0, p.x - isl.maxX), Math.max(isl.minZ - p.z, 0, p.z - isl.maxZ));
-      const land = L.land;
-      const dLand = Math.hypot(Math.max(land.minX - p.x, 0, p.x - land.maxX), Math.max(land.minZ - p.z, 0, p.z - land.maxZ));
-      const r = dIslet < dLand ? isl : land;
-      tx = clamp(p.x, r.minX + 6, r.maxX - 6);
-      tz = clamp(p.z, r.minZ + 6, r.maxZ - 6);
-    }
-    if (!this.findSafeSpot(tx, 0.5, tz, tmpA)) tmpA.set(L.spawn[0], L.spawn[1] + 0.1, L.spawn[2]);
+    const land = this.landSpot;
+    terr.nearestLand(p.x, p.z, land);
+    const tx = land.x,
+      tz = land.z;
+    if (!this.findSafeSpot(tx, terr.baseHeight(tx, tz) + 0.5, tz, tmpA)) tmpA.set(L.spawn[0], L.spawn[1] + 0.1, L.spawn[2]);
     this.pos.copy(tmpA);
     this.vel.set(0, 0, 0);
     this.renderOffset.set(0, 0, 0);

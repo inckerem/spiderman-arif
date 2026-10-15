@@ -1,6 +1,6 @@
 import type { Rng } from '../core/rng';
 import type { CollisionWorld } from '../physics/collision';
-import type { Terrain } from '../physics/terrain';
+import type { TerrainModel } from '../physics/terrain';
 import type { CityLayout, Rect } from '../world/types';
 import type { MapId } from './ids';
 
@@ -44,12 +44,12 @@ export interface MapDefinition {
   collisionExtent: Rect;
   /** Pure data: the whole city layout. */
   generate(seed: number): CityLayout;
-  createTerrain(layout: CityLayout): Terrain;
+  createTerrain(layout: CityLayout): TerrainModel;
   /** Map-specific colliders (bridges, landmarks), added after the generic buildings, trees and props. */
   addColliders(w: CollisionWorld, layout: CityLayout): void;
   /** Random test positions (x, y, z) before the safe-spot search: street level and park. */
   testSpots: {
-    street(rng: Rng, L: CityLayout, t: Terrain): [number, number, number];
+    street(rng: Rng, L: CityLayout, t: TerrainModel): [number, number, number];
     park(rng: Rng, L: CityLayout): [number, number, number];
   };
   /** Traversal bot routes (test d). */
@@ -59,7 +59,7 @@ export interface MapDefinition {
     expect: { minDistance: number; treeOnlyPark: boolean };
   };
   autopilot: {
-    waypoints(L: CityLayout, t: Terrain): Waypoint[];
+    waypoints(L: CityLayout, t: TerrainModel): Waypoint[];
     /**
      * Route of a leg from (ax, az) to (bx, bz) into `out` (preallocated
      * points); `variant` picks between two shapes. Returns the point count.
