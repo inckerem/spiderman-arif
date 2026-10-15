@@ -14,7 +14,7 @@ export const HEIGHT_CELL = 2;
  * transform of the water mask on the grid), then a slope limiter keeps
  * every land slope at or under MAX_SLOPE. Water vertices stay at 0.
  */
-export function bakeIstanbulHeights(mask: WaterMask, extent: Rect): HeightGrid {
+export function bakeIstanbulHeights(mask: WaterMask, extent: Rect): HeightGrid & { wet: Uint8Array; shore: Float32Array } {
   const cell = HEIGHT_CELL;
   const nx = Math.ceil((extent.maxX - extent.minX) / cell);
   const nz = Math.ceil((extent.maxZ - extent.minZ) / cell);
@@ -22,16 +22,12 @@ export function bakeIstanbulHeights(mask: WaterMask, extent: Rect): HeightGrid {
     vz = nz + 1;
   const n = vx * vz;
   const wet = new Uint8Array(n);
-  const d2 = new Float32Array(n);
   for (let j = 0; j < vz; j++) {
     const z = extent.minZ + j * cell;
-    for (let i = 0; i < vx; i++) {
-      const w = mask.isWater(extent.minX + i * cell, z);
-      wet[j * vx + i] = w ? 1 : 0;
-      d2[j * vx + i] = w ? 0 : 1e20;
-    }
+    for (let i = 0; i < vx; i++) wet[j * vx + i] = mask.isWater(extent.minX + i * cell, z) ? 1 : 0;
   }
-  edt2d(d2, vx, vz);
+  const shore = distanceField(wet, vx, vz, cell, extent, []);
+  const d2 = shore;
   const h = new Float32Array(n);
   for (let j = 0; j < vz; j++) {
     const z = extent.minZ + j * cell;
@@ -40,7 +36,7 @@ export function bakeIstanbulHeights(mask: WaterMask, extent: Rect): HeightGrid {
       if (wet[k]) continue;
       const x = extent.minX + i * cell;
       // Distance to the shore: half a cell less than to the nearest water vertex.
-      const ds = Math.max(0, Math.sqrt(d2[k]!) * cell - cell * 0.5);
+      const ds = Math.max(0, d2[k]! - cell * 0.5);
       const f = smoothstep(QUAY, SHORE_RISE, ds);
       if (f <= 0) continue;
       let m = 0;
@@ -56,7 +52,26 @@ export function bakeIstanbulHeights(mask: WaterMask, extent: Rect): HeightGrid {
     }
   }
   limitSlope(h, vx, vz, cell, MAX_SLOPE * 0.9);
-  return { x0: extent.minX, z0: extent.minZ, cell, nx, nz, h };
+  return { x0: extent.minX, z0: extent.minZ, cell, nx, nz, h, wet, shore };
+}
+
+/**
+ * Distance (m) from every grid vertex to the nearest water vertex or to any
+ * of `rects` (exact Euclidean distance transform on the vertex grid).
+ */
+export function distanceField(wet: Uint8Array, vx: number, vz: number, cell: number, extent: Rect, rects: readonly Rect[]): Float32Array {
+  const f = new Float32Array(vx * vz);
+  for (let k = 0; k < f.length; k++) f[k] = wet[k] ? 0 : 1e20;
+  for (const r of rects) {
+    const i0 = Math.max(0, Math.ceil((r.minX - extent.minX) / cell)),
+      i1 = Math.min(vx - 1, Math.floor((r.maxX - extent.minX) / cell));
+    const j0 = Math.max(0, Math.ceil((r.minZ - extent.minZ) / cell)),
+      j1 = Math.min(vz - 1, Math.floor((r.maxZ - extent.minZ) / cell));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) f[j * vx + i] = 0;
+  }
+  edt2d(f, vx, vz);
+  for (let k = 0; k < f.length; k++) f[k] = Math.sqrt(f[k]!) * cell;
+  return f;
 }
 
 /**

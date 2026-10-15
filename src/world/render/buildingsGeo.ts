@@ -1,6 +1,5 @@
 import { GeomBuilder } from '../../render/geomBuilder';
 import { Rng } from '../../core/rng';
-import { CURB } from '../../physics/terrain';
 import {
   D_DOWNTOWN,
   D_WATERFRONT,
@@ -139,10 +138,17 @@ export function addBuildingGeometry(bld: Building, cb: ChunkBuilders, signRect: 
   const roofCol: RGB = bld.district === D_DOWNTOWN ? [0.5, 0.52, 0.55] : rng.chance(0.5) ? [0.34, 0.34, 0.37] : [0.42, 0.4, 0.38];
   const trim = st.trim as RGB;
   const wall = st.wall as RGB;
+  // Stone plinth on a slope: plain sides, no windows (its top is under the building).
+  if (bld.plinth) {
+    const p = bld.plinth;
+    noWindows(f);
+    f.setColor(0.72, 0.68, 0.6);
+    f.box(p.minX, p.minY, p.minZ, p.maxX, p.maxY, p.maxZ, 1 | 2 | 16 | 32);
+  }
   for (let i = 0; i < vols.length; i++) {
     const v = vols[i]!;
     const above = vols[i + 1];
-    const isGround = v.minY <= CURB + 0.01;
+    const isGround = v.minY <= bld.volumes[0]!.minY + 0.01;
     const storefront = isGround ? st.storefront : 0;
     const crown = v.role === 2;
     const style = crown && bld.district === D_DOWNTOWN ? 6 : st.window;

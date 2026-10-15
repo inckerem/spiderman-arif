@@ -102,6 +102,8 @@ export interface Building {
   /** Footprint of the ground volume. */
   footprint: Rect;
   seed: number;
+  /** Stone plinth under a building on a slope (from below the low side up to the floor). */
+  plinth?: BoxSpec;
 }
 
 export const TREE_OAK = 0;
@@ -197,4 +199,20 @@ export interface CityLayout {
   /** Spawn point on a sidewalk. */
   spawn: [number, number, number];
   stats: { buildings: number; parkTrees: number; streetTrees: number; maxHeight: number };
+  /** Maps without a street grid: road centre lines with widths (Istanbul). */
+  roads?: RoadPiece[];
+  /** Land polygons (water is everything outside them). */
+  landPolygons?: Array<Array<[number, number]>>;
+  /** Park rectangles (grass), all maps without a single central park. */
+  parks?: Rect[];
+  /** Reserved landmark footprints (paved; landmark geometry stands there). */
+  landmarks?: Array<{ id: string; rect: Rect }>;
+}
+
+/** A road centre polyline with its full width and class (0 lane, 1 street, 2 arterial, 3 coastal). */
+export interface RoadPiece {
+  pts: Array<[number, number]>;
+  width: number;
+  cls: 0 | 1 | 2 | 3;
+  cars: boolean;
 }

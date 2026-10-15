@@ -156,10 +156,11 @@ export async function buildCityVisuals(L: CityLayout, visuals: MapVisuals, onPro
     const off = isPark ? 0 : 1.5;
     const x = p.x + Math.sin(p.rot) * off,
       z = p.z + Math.cos(p.rot) * off;
-    const y = (isPark ? CURB : 0) + 0.05 + (isPark ? 0.03 : 0.0);
+    // Street lamps stand on the curb: the pool lies on the road level below.
+    const y = p.y - CURB + (isPark ? CURB : 0) + 0.05 + (isPark ? 0.03 : 0.0);
     m.makeRotationX(-Math.PI / 2);
     m.premultiply(scaleM.makeScale(r, 1, r));
-    m.setPosition(x, Math.max(y, CURB + 0.06), z);
+    m.setPosition(x, Math.max(y, p.y + 0.06), z);
     pools.setMatrixAt(i, m);
   });
   pools.instanceMatrix.needsUpdate = true;

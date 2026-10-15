@@ -56,6 +56,30 @@ test('map selection precedence and the map screen', async ({ page }) => {
   await page.locator('.sk-map[data-map="manhattan"]').click();
   expect(await storedMap(page)).toBe('manhattan');
   expect(await page.evaluate(() => (window as any).__game.ready)).toBe(true);
-  await page.getByRole('button', { name: 'Geri' }).first().click();
+  // Picking İstanbul saves it and reloads with harita=istanbul; the seed stays in the URL.
+  await page.locator('.sk-map[data-map="istanbul"]').click();
+  await page.waitForURL(/harita=istanbul/, { timeout: 60_000 });
+  problems = await boot(page, page.url());
+  expect(await mapId(page)).toBe('istanbul');
+  expect(await storedMap(page)).toBe('istanbul');
+  const url2 = new URL(page.url());
+  expect(url2.searchParams.get('harita')).toBe('istanbul');
+  expect(url2.searchParams.get('seed')).toBe('4242');
+  expect(problems).toEqual([]);
+
+  // A plain reload (no parameter) stays on Istanbul: the setting decides.
+  problems = await boot(page, '/');
+  expect(await mapId(page)).toBe('istanbul');
+  // The settings screen's reset keeps the map.
+  await page.evaluate(() => (window as any).__game.showUi(true));
+  await page.getByRole('button', { name: 'Ayarlar' }).first().click();
+  await page.getByRole('button', { name: 'Varsayılanlara dön' }).click();
+  expect(await storedMap(page)).toBe('istanbul');
+  expect(problems).toEqual([]);
+
+  // ?harita=manhattan wins over the stored setting (which stays Istanbul).
+  problems = await boot(page, '/?harita=manhattan');
+  expect(await mapId(page)).toBe('manhattan');
+  expect(await storedMap(page)).toBe('istanbul');
   expect(problems).toEqual([]);
 });

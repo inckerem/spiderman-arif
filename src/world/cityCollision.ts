@@ -51,6 +51,8 @@ export function buildCollisionWorld(layout: CityLayout, map: MapDefinition): Col
   const BLD = F_BUILDING | F_ANCHOR | F_CLIMB | F_CAMERA;
   for (const b of layout.buildings) {
     const surf = b.district === D_DOWNTOWN ? SURF_GLASS : SURF_CONCRETE;
+    // Stone plinth that levels a building on a slope (maps with hills only).
+    if (b.plinth) w.addBox(b.plinth.minX, b.plinth.minY, b.plinth.minZ, b.plinth.maxX, b.plinth.maxY, b.plinth.maxZ, BLD, SURF_STONE, b.id);
     for (const v of b.volumes) w.addBox(v.minX, v.minY, v.minZ, v.maxX, v.maxY, v.maxZ, BLD, surf, b.id);
     for (const p of b.parapets) w.addBox(p.minX, p.minY, p.minZ, p.maxX, p.maxY, p.maxZ, BLD, SURF_STONE, b.id);
     for (const pr of b.props) {

@@ -40,6 +40,18 @@ Dependency direction: `config`, `core` ← `physics` ← `world` (generation pro
 
 The game builds one map per page load; a map switch saves `settings.map` and reloads with `?harita=<id>` (other URL parameters such as `seed` stay). `Game` gets the id through `GameOptions.mapId` (`App.boot(seed, mapId)`), and every layout carries `layout.mapId`, so any code holding a layout reaches its map with `getMap(layout.mapId)` (simulation) or `getMapVisuals(layout.mapId)` (rendering) without new constructor parameters. Generic code (buildings, trees, props, traffic, pedestrians, the player) reads the generic layout fields; Manhattan-only data (avenues, streets, park rectangle, pond, islet, bridge spec) is read only inside `maps/manhattan/` and through the map hooks. A golden digest (`__game.goldenDigest()`, `tests/golden/manhattan.json`) hashes the Manhattan layout, the collider arrays and the outputs of the deterministic drivers; refactors that must not change behaviour are checked against it bit for bit.
 
+### Istanbul (M13)
+
+`maps/istanbul/` builds the second map in about 0.6 s: `data.ts` holds the compressed-real geography (land polygons, hills, hand-laid arterials, landmark sites, parks, piers, BSP roots), `terrain.ts` bakes the heights (hills faded in from the quay by an exact shore distance transform, then slope-limited), `streets.ts` the street tools, `gen.ts` the layout:
+
+1. Coastal roads are the 22 m iso line (marching squares) of the distance to water or to a coastal landmark site, so they follow the shore and go around Dolmabahçe or Ortaköy on the inland side.
+2. Hand-laid axis-aligned arterials (Atatürk Bulvarı, Divanyolu, Tarlabaşı, Cumhuriyet-Büyükdere, Barbaros...) are clipped where they would cross water, a landmark site or a park.
+3. A seeded BSP per landmass splits rectangles at 35-65 % (±6 m) into streets (11-14 m, cars) or lanes (6-8 m); an arterial crossing a cell over 40 % of its extent forces the cut. Cuts are clipped like the arterials, so streets end in T-junctions at landmarks and parks.
+4. Each leaf keeps its largest rectangle of valid ground (on land, clear of the coastal road, landmark sites, parks and every road strip) as a block. Lots of 10-22 m (Levent 30-48 m) get plain box buildings (4.0 m shop floor, 3.1 m floors, district floor ranges) on a stone plinth from below the low side up to the highest ground plus the curb; lots that span more than 6 m of height are split.
+5. Blocks, landmark sites and parks are raised by the curb (`RectIndex`); everything else (roads, quays) is at the road level, so the ground mesh and the physics agree.
+
+Its ground (`world/render/terrainGeo.ts`) is a 4 m terrain grid (water vertices next to land pulled onto the shore line), slabs draped at the curb height for blocks, plazas and parks, road ribbons as decals, seawalls along the polygon edges, and piers.
+
 ## 3. Fixed-timestep loop
 
 - Simulation rate 120 Hz (`dt = 1/120`). `requestAnimationFrame` feeds an accumulator with the clamped frame delta (max 0.1 s). While `acc >= dt`, the previous state is snapshotted and one tick runs. At most 12 ticks per frame; excess time is dropped (slow motion instead of a spiral of death).

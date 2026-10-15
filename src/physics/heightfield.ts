@@ -1,7 +1,7 @@
 import { tuning } from '../config/tuning';
 import type { Rect } from '../world/types';
 import { SURF_CONCRETE, SURF_GRASS, SURF_STONE } from './collision';
-import type { RoadIndex } from './roadIndex';
+import type { RectIndex, RoadIndex } from './roadIndex';
 import { CURB, type TerrainHit, type TerrainModel } from './terrain';
 import type { WaterMask } from './waterMask';
 
@@ -52,6 +52,8 @@ export class HeightfieldTerrain implements TerrainModel {
     readonly water: WaterMask,
     readonly roads: RoadIndex,
     readonly parks: readonly Rect[] = [],
+    /** Raised areas (blocks, plazas, parks) at the curb height; without it everything off the roads is. */
+    readonly raised: RectIndex | null = null,
   ) {
     this.x0 = grid.x0;
     this.z0 = grid.z0;
@@ -111,6 +113,7 @@ export class HeightfieldTerrain implements TerrainModel {
   height(x: number, z: number): number {
     if (this.water.isWater(x, z)) return -12;
     const b = this.baseHeight(x, z);
+    if (this.raised) return this.raised.contains(x, z) ? b + CURB : b;
     return this.roads.isRoad(x, z) ? b : b + CURB;
   }
 

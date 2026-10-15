@@ -532,7 +532,7 @@ function distToPolyline(x: number, z: number, pts: Array<[number, number]>): num
   return best;
 }
 
-function makeTree(rng: Rng, species: number, x: number, z: number, y: number, height: number, park: boolean): Tree {
+export function makeTree(rng: Rng, species: number, x: number, z: number, y: number, height: number, park: boolean): Tree {
   let rx: number, ry: number, cyF: number, trunkTopF: number;
   switch (species) {
     case TREE_PINE:

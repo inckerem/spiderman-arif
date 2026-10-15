@@ -4,7 +4,7 @@ import { DEFAULT_MAP, MAP_PARAM, isMapId, type MapId } from './ids';
  * Maps the client can build and play. A map id that is known but not yet
  * playable (still under construction) is treated like an unknown one.
  */
-export const PLAYABLE_MAPS: readonly MapId[] = ['manhattan'];
+export const PLAYABLE_MAPS: readonly MapId[] = ['manhattan', 'istanbul'];
 
 export const isPlayableMap = (v: unknown): v is MapId => isMapId(v) && PLAYABLE_MAPS.includes(v);
 

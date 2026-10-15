@@ -32,6 +32,8 @@ import {
 import { goldenDigest } from './golden';
 import { terrainSelfTest } from './terrainSelfTest';
 import { mapSwitchUrl } from '../maps/select';
+import { getMap } from '../maps/registry';
+import { buildCollisionWorld } from '../world/cityCollision';
 
 declare global {
   interface Window {
@@ -175,6 +177,16 @@ export function installTestApi(game: Game, app?: App): void {
     goldenDigest: (attractSeconds = 120) => goldenDigest(game, attractSeconds),
     /** Heightfield terrain, water mask and road index checks (Istanbul data). */
     terrainSelfTest: (rays = 20000, points = 100000) => terrainSelfTest(rays, points),
+    /** Times a fresh generation of this map (layout, terrain, colliders) in ms. */
+    timeGeneration(): Record<string, number> {
+      const map = getMap(game.mapId);
+      const t0 = performance.now();
+      const L = map.generate(game.layout.seed);
+      const t1 = performance.now();
+      const w = buildCollisionWorld(L, map);
+      const t2 = performance.now();
+      return { layoutMs: t1 - t0, collisionMs: t2 - t1, totalMs: t2 - t0, colliders: w.count, buildings: L.buildings.length };
+    },
     /** The URL a map switch reloads to. */
     mapUrl: (id: string) => mapSwitchUrl(location.href, id as Parameters<typeof mapSwitchUrl>[1]),
     simTiming(): { msPerTick: number; ticks: number } {
