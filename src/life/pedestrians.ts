@@ -173,14 +173,16 @@ transformed.y += abs(sw) * 0.035;`,
   }
 
   private buildLoops(L: CityLayout): void {
+    // Narrow sidewalks (Istanbul, 3 m) are walked down their middle.
+    const inset = L.sidewalk !== undefined ? L.sidewalk / 2 : WALK_INSET;
     for (const b of L.blocks) {
       const w = b.maxX - b.minX,
         d = b.maxZ - b.minZ;
-      if (w < WALK_INSET * 3 || d < WALK_INSET * 3) continue;
-      const x0 = b.minX + WALK_INSET,
-        x1 = b.maxX - WALK_INSET,
-        z0 = b.minZ + WALK_INSET,
-        z1 = b.maxZ - WALK_INSET;
+      if (w < inset * 3 || d < inset * 3) continue;
+      const x0 = b.minX + inset,
+        x1 = b.maxX - inset,
+        z0 = b.minZ + inset,
+        z1 = b.maxZ - inset;
       const weight = b.district === D_DOWNTOWN ? 3 : b.district === D_MID ? 2 : b.district === D_LOW ? 1 : 1.5;
       this.addLoop(
         [

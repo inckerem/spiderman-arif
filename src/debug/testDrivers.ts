@@ -1417,8 +1417,14 @@ export function lifeTest(game: Game): Record<string, unknown> {
   const L = game.layout;
   const traffic = game.traffic;
   const peds = game.peds;
-  const onRoad = (x: number, z: number): boolean =>
-    L.avenues.some((a) => Math.abs(x - a.center) <= a.width / 2 + 0.5) || L.streets.some((s) => Math.abs(z - s.center) <= s.width / 2 + 0.5);
+  const terr = game.world.terrain;
+  // On the carriageway, with half a metre (a metre where the road pieces meet at an angle) of slack.
+  const slack = L.roads ? 1 : 0.5;
+  const onRoad = L.roads
+    ? (x: number, z: number): boolean =>
+        terr.isRoad(x, z) || terr.isRoad(x + slack, z) || terr.isRoad(x - slack, z) || terr.isRoad(x, z + slack) || terr.isRoad(x, z - slack)
+    : (x: number, z: number): boolean =>
+        L.avenues.some((a) => Math.abs(x - a.center) <= a.width / 2 + 0.5) || L.streets.some((s) => Math.abs(z - s.center) <= s.width / 2 + 0.5);
   const counts: Record<string, number> = {};
   for (let q = 0; q < 4; q++) {
     game.applyQuality(q);
@@ -1458,10 +1464,19 @@ export function lifeTest(game: Game): Record<string, unknown> {
     peds.mesh.getMatrixAt(i, m);
     v.setFromMatrixPosition(m);
     const inPark = v.x > L.park.minX && v.x < L.park.maxX && v.z > L.park.minZ && v.z < L.park.maxZ;
-    if (!inPark && v.y < 0.1) pedOnRoad++;
+    // At the road level (not on a curb-high sidewalk) outside the park.
+    if (!inPark && v.y < terr.baseHeight(v.x, v.z) + 0.1) pedOnRoad++;
+  }
+  // Cars follow the road level on slopes (Istanbul): the instance height against the terrain.
+  let carYErr = 0;
+  for (let i = 0; i < traffic.count; i++) {
+    traffic.mesh.getMatrixAt(i, m);
+    v.setFromMatrixPosition(m);
+    carYErr = Math.max(carYErr, Math.abs(v.y - terr.baseHeight(v.x, v.z)));
   }
   return {
     ...counts,
+    carYErr,
     nodes: traffic.nodeCount,
     links: traffic.linkCount,
     loops: peds.loopCount,
