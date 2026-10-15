@@ -16,6 +16,7 @@ import {
 import type { TickInput } from '../input/input';
 import { Targeting, makeAnchorResult, copyAnchor, type AnchorResult } from './targeting';
 import type { CityLayout } from '../world/types';
+import { findSafeSpot } from '../physics/safeSpot';
 
 export const MODE_GROUND = 0;
 export const MODE_AIR = 1;
@@ -463,7 +464,9 @@ export class Player {
     const G = tuning.ground;
     const v = this.vel;
     const wishLen = this.wish.length();
-    const maxSpeed = inp.sprint ? G.sprintSpeed : G.runSpeed;
+    // The touch stick at its rim sprints too, but only the sprint action clings to walls.
+    const sprint = inp.sprint || inp.groundSprint;
+    const maxSpeed = sprint ? G.sprintSpeed : G.runSpeed;
     const hs = Math.hypot(v.x, v.z);
     const rolling = this.rollTimer > 0;
     if (hs > maxSpeed + 0.05) {
@@ -482,7 +485,7 @@ export class Player {
     } else if (!rolling) {
       const tx = this.wish.x * maxSpeed,
         tz = this.wish.z * maxSpeed;
-      const acc = wishLen > 0.01 ? (inp.sprint ? G.sprintAccel : G.accel) : G.decel;
+      const acc = wishLen > 0.01 ? (sprint ? G.sprintAccel : G.accel) : G.decel;
       const dx = tx - v.x,
         dz = tz - v.z;
       const dl = Math.hypot(dx, dz);
@@ -500,7 +503,7 @@ export class Player {
 
     if (this.jumpBuffer > 0 && !rolling) {
       this.jumpBuffer = 0;
-      v.y = G.jumpSpeed + (inp.sprint && hs > G.runSpeed ? G.sprintJumpBonus : 0);
+      v.y = G.jumpSpeed + (sprint && hs > G.runSpeed ? G.sprintJumpBonus : 0);
       this.setMode(MODE_AIR);
       this.coyote = 0;
       this.events.push({ type: 'jump' });
@@ -1760,30 +1763,9 @@ export class Player {
     return !this.world.capsuleFree(p.x, p.y + 0.6, p.z, r, h);
   }
 
-  /** Find the nearest free standing position around (x, y, z). */
+  /** Find the nearest free standing position around (x, y, z) (see `physics/safeSpot.ts`). */
   findSafeSpot(x: number, y: number, z: number, out: Vector3): boolean {
-    const r = tuning.body.radius,
-      h = tuning.body.height;
-    const w = this.world;
-    const tryAt = (cx: number, cz: number, maxY: number): boolean => {
-      const s = w.supportHeight(cx, cz, maxY, 0);
-      if (s.y === -Infinity) return false;
-      if (!w.capsuleFree(cx, s.y + 0.02, cz, r + 0.05, h)) return false;
-      out.set(cx, s.y + 0.02, cz);
-      return true;
-    };
-    if (tryAt(x, z, y + 1.5)) return true;
-    const radii = [0.8, 1.6, 2.5, 4, 6, 9, 13, 18, 25, 35, 50, 70];
-    for (const rad of radii) {
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2;
-        const cx = x + Math.cos(a) * rad,
-          cz = z + Math.sin(a) * rad;
-        if (tryAt(cx, cz, y + 1.5)) return true;
-        if (tryAt(cx, cz, y + 40)) return true;
-      }
-    }
-    return false;
+    return findSafeSpot(this.world, x, y, z, out);
   }
 
   private recover(): void {

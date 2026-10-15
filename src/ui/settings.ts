@@ -18,6 +18,8 @@ export interface Settings {
   fovOffset: number;
   /** Mouse sensitivity multiplier, 0.2..3. */
   sensitivity: number;
+  /** Touch look-drag sensitivity multiplier, 0.2..3 (touch controls only). */
+  touchSensitivity: number;
   invertY: boolean;
   /** Camera turns toward the travel direction while flying fast with the mouse idle. */
   cameraFollow: boolean;
@@ -42,6 +44,7 @@ export const SETTINGS_LIMITS = {
   renderScale: { min: 0.5, max: 1.5 },
   fovOffset: { min: -10, max: 15 },
   sensitivity: { min: 0.2, max: 3 },
+  touchSensitivity: { min: 0.2, max: 3 },
   masterVolume: { min: 0, max: 1 },
   musicVolume: { min: 0, max: 1 },
   sfxVolume: { min: 0, max: 1 },
@@ -58,6 +61,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze<Settings>({
   dynamicResolution: true,
   fovOffset: 0,
   sensitivity: 1,
+  touchSensitivity: 1,
   invertY: false,
   cameraFollow: true,
   masterVolume: 0.8,
@@ -107,6 +111,7 @@ export function sanitizeSettings(data: unknown): Settings {
     dynamicResolution: boolOr(o.dynamicResolution, d.dynamicResolution),
     fovOffset: num('fovOffset'),
     sensitivity: num('sensitivity'),
+    touchSensitivity: num('touchSensitivity'),
     invertY: boolOr(o.invertY, d.invertY),
     cameraFollow: boolOr(o.cameraFollow, d.cameraFollow),
     masterVolume: num('masterVolume'),
@@ -137,9 +142,14 @@ function writeJson(key: string, value: unknown): void {
   }
 }
 
-/** Loads settings (key `skythread.settings.v1`), validated; defaults on any problem. */
-export function loadSettings(): Settings {
-  return sanitizeSettings(readJson(SETTINGS_KEY));
+/**
+ * Loads settings (key `skythread.settings.v1`), validated; defaults on any
+ * problem. `firstRun` overrides defaults only when nothing is stored yet
+ * (touch devices start on Low quality); once saved, the stored value wins.
+ */
+export function loadSettings(firstRun: Partial<Settings> = {}): Settings {
+  const stored = readJson(SETTINGS_KEY);
+  return sanitizeSettings(stored === null ? { ...DEFAULT_SETTINGS, ...firstRun } : stored);
 }
 
 /** Saves a validated copy of the settings. Never throws. */

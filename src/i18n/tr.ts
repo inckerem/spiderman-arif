@@ -25,8 +25,11 @@ export const tr = {
     paused: 'Duraklatıldı',
     clickToPlay: 'Oynamak için tıkla',
     audioHint: 'Sesi açmak için herhangi bir yere tıkla',
+    audioHintTouch: 'Sesi açmak için ekrana dokun',
     credits: 'Tamamen kodla üretilmiş bir şehir. Müzik: kullanıcı parçası.',
     backKey: 'Esc',
+    photo: 'Fotoğraf Modu',
+    music: (on: boolean) => (on ? 'Müzik: Açık' : 'Müzik: Kapalı'),
   },
   controls: {
     title: 'Kontroller',
@@ -67,6 +70,32 @@ export const tr = {
       'Alçak engellerin üstünden koşarken otomatik atlarsın.',
     ],
     tipsTitle: 'İpuçları',
+    /** Touch controls card: [button caption, note or empty, description]. */
+    touchRows: [
+      ['Sol başparmak', '', 'Hareket: çubuğu biraz it yürü, sonuna kadar it koş / sallanırken yön ver'],
+      ['Sağda sürükle', '', 'Etrafa bak'],
+      ['AĞ', '(basılı tut)', 'Nişangâhın gösterdiği yere ağ at ve sallan; bırakınca ivmeyle fırla'],
+      ['ÇEK', '', 'Seni hedefe hızla çeken ağ (zip)'],
+      ['ZIPLA', '', 'Zıpla / ipi ya da zip ağını kes / duvardan sıçra'],
+      ['TIRMAN', '(basılı tut)', 'Duvara tutun ve tırman; yerde koş'],
+      ['DALIŞ', '(basılı tut)', 'Havada dalış (yüksekliği hıza çevirir)'],
+      ['+ / −', '', 'Sallanırken ipi kısalt / uzat'],
+      ['❚❚', '', 'Duraklat; fotoğraf modu ve müzik duraklatma menüsünde'],
+    ] as const,
+  },
+  /** On-screen touch controls and the portrait prompt. */
+  touch: {
+    web: 'Ağ',
+    pull: 'Çek',
+    jump: 'Zıpla',
+    dive: 'Dalış',
+    climb: 'Tırman',
+    attack: 'Saldırı',
+    reelIn: 'İpi kısalt',
+    reelOut: 'İpi uzat',
+    pause: 'Duraklat',
+    rotateTitle: 'Cihazını yatay çevir',
+    rotateText: 'SKYTHREAD yatay ekranda oynanır.',
   },
   costume: {
     title: 'Kostüm',
@@ -158,6 +187,7 @@ export const tr = {
     dynamicRes: 'Dinamik çözünürlük',
     fov: 'Görüş açısı (FOV) ek',
     sensitivity: 'Fare hassasiyeti',
+    touchSensitivity: 'Dokunmatik bakış hassasiyeti',
     invertY: 'Dikey ekseni ters çevir',
     cameraFollow: 'Kamera otomatik takip',
     master: 'Ana ses',
@@ -210,11 +240,32 @@ export const tr = {
     hint: (move: string, up: string, down: string, fast: string) =>
       `${move} + fare: serbest kamera · ${up}/${down}: yukarı/aşağı · ${fast}: hızlı`,
     saved: 'Fotoğraf kaydedildi',
+    touchHint: 'Sol başparmak: kamerayı uçur · sağda sürükle: bak',
   },
   warnings: {
     noWebGL: 'Bu tarayıcı WebGL2 desteklemiyor. Lütfen güncel bir masaüstü tarayıcı kullanın.',
     musicMissing: 'Müzik dosyası bulunamadı; oyun müziksiz devam ediyor.',
     bootFailed: 'Oyun başlatılamadı. Sayfayı yenileyin; sorun sürerse bu site için kayıtlı tarayıcı verilerini silin.',
+  },
+  /** Combat (M11): enemy and event names, keyed like `combat/roster.ts` (`ROSTER[kind].key`) and `CrimeEventInfo.type`. */
+  combat: {
+    enemies: {
+      thug: 'Serseri',
+      bat: 'Sopalı',
+      gunman: 'Tetikçi',
+      brute: 'Zırhlı',
+      drone: 'Dron',
+      kocbasi: 'Koçbaşı',
+      kuzgun: 'Kuzgun',
+      diken: 'Diken',
+    },
+    events: {
+      robbery: 'Soygun',
+      gang: 'Çete kavgası',
+      drones: 'Dron saldırısı',
+      /** Boss sighting: the boss name goes in place of {name}. */
+      boss: '{name} görüldü',
+    },
   },
   /** Fictional in-world signage (world art, kept here with all other text). */
   signs: [

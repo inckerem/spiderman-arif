@@ -25,6 +25,11 @@
   --sk-dots-teal: radial-gradient(rgba(15, 92, 99, 0.15) 1px, transparent 1.6px);
   --sk-dots-light: radial-gradient(rgba(244, 239, 230, 0.07) 1px, transparent 1.6px);
   --sk-skew: -12deg;
+  /* Notches and home indicators (index.html sets viewport-fit=cover). */
+  --sk-safe-t: env(safe-area-inset-top, 0px);
+  --sk-safe-r: env(safe-area-inset-right, 0px);
+  --sk-safe-b: env(safe-area-inset-bottom, 0px);
+  --sk-safe-l: env(safe-area-inset-left, 0px);
   font-size: clamp(14px, calc(0.62vw + 0.55vh), 20px);
 }
 
@@ -35,14 +40,24 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
   background: #0b0d10;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 canvas#game {
   display: block;
   width: 100vw;
   height: 100vh;
+  /* The dynamic viewport: mobile browser bars never cover the bottom of the view. */
+  height: 100dvh;
   outline: none;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #ui,
@@ -63,6 +78,7 @@ canvas#game {
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -930,6 +946,9 @@ canvas#game {
   display: none;
   padding: 2.6rem 1.5rem;
   overflow: auto;
+  /* Menus scroll vertically only (the main menu's sunburst is wider than a phone). */
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
 .sk-screen.is-active {
@@ -2249,5 +2268,506 @@ label.sk-st-label {
 @media (max-width: 720px) {
   .sk-costumes {
     grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ------------------------------------------------------ touch controls */
+
+/* Layer above the HUD, below the photo panel and the menus (mounted by UI.mountTouch). */
+.sk-touch {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: none;
+  touch-action: none;
+}
+
+.sk-touch[data-view='play'],
+.sk-touch[data-view='photo'] {
+  display: block;
+}
+
+.sk-touch[data-view='photo'] .sk-pad,
+.sk-touch[data-view='photo'] .sk-tb-pause {
+  display: none;
+}
+
+/* Rooftop moment: the controls stay usable but step back. */
+.sk-cine .sk-touch {
+  opacity: 0.35;
+}
+
+.sk-tz {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.sk-tz-stick {
+  left: 0;
+  width: 42%;
+}
+
+.sk-tz-look {
+  right: 0;
+  width: 58%;
+}
+
+/* Floating stick: idle in the bottom-left corner, under the thumb while held. */
+.sk-stick {
+  --r: var(--sk-stick-r, 56px);
+  position: absolute;
+  left: calc(var(--sk-safe-l) + var(--r) + 1.6rem);
+  top: calc(100% - var(--sk-safe-b) - var(--r) - 1.4rem);
+  width: calc(var(--r) * 2);
+  height: calc(var(--r) * 2);
+  margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1);
+  border: 3px solid rgba(17, 17, 17, 0.6);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(244, 239, 230, 0.06) 0%, rgba(244, 239, 230, 0.18) 100%);
+  box-shadow:
+    inset 0 0 0 2px rgba(244, 239, 230, 0.35),
+    3px 3px 0 rgba(17, 17, 17, 0.35);
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.sk-stick.is-active {
+  opacity: 0.95;
+}
+
+.sk-stick.is-sprint {
+  border-color: var(--sk-amber);
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 176, 32, 0.6),
+    0 0 0 3px var(--sk-ink);
+}
+
+.sk-stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--r) * 0.92);
+  height: calc(var(--r) * 0.92);
+  margin: calc(var(--r) * -0.46) 0 0 calc(var(--r) * -0.46);
+  border: 3px solid var(--sk-ink);
+  border-radius: 50%;
+  background-color: var(--sk-paper);
+  background-image: var(--sk-dots-teal);
+  background-size: 5px 5px;
+  box-shadow: 3px 3px 0 var(--sk-ink);
+  will-change: transform;
+}
+
+.sk-stick.is-sprint .sk-stick-knob {
+  background-color: var(--sk-amber);
+}
+
+/* Action buttons: centres laid out from the bottom-right corner in units of --u. */
+.sk-pad {
+  --u: clamp(48px, 14.5vh, 74px);
+  position: absolute;
+  right: calc(var(--sk-safe-r) + 14px);
+  bottom: calc(var(--sk-safe-b) + 14px);
+  width: 0;
+  height: 0;
+}
+
+.sk-tb {
+  --s: var(--u);
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 3px solid var(--sk-ink);
+  border-radius: 50%;
+  background-color: rgba(244, 239, 230, 0.82);
+  color: var(--sk-ink);
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  box-shadow: 3px 3px 0 var(--sk-ink);
+  opacity: 0.9;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  outline: none;
+  cursor: pointer;
+}
+
+.sk-pad .sk-tb {
+  width: var(--s);
+  height: var(--s);
+  left: calc(var(--x) * var(--u) - var(--s) / 2);
+  top: calc(var(--y) * var(--u) - var(--s) / 2);
+  font-size: calc(var(--u) * 0.25);
+  letter-spacing: 0.01em;
+}
+
+.sk-pad .sk-tb-web {
+  font-size: calc(var(--u) * 0.36);
+}
+
+.sk-pad .sk-tb-climb,
+.sk-pad .sk-tb-dive {
+  font-size: calc(var(--u) * 0.185);
+  letter-spacing: 0;
+}
+
+.sk-tb.is-down {
+  background-color: var(--sk-amber);
+  box-shadow: 1px 1px 0 var(--sk-ink);
+  transform: translate(2px, 2px);
+}
+
+.sk-tb-label {
+  pointer-events: none;
+}
+
+.sk-tb-web {
+  --s: calc(var(--u) * 1.5);
+  --x: -0.92;
+  --y: -0.95;
+  background-color: rgba(255, 176, 32, 0.92);
+}
+
+.sk-tb-web.is-down {
+  background-color: var(--sk-amber-hi);
+}
+
+.sk-tb-jump {
+  --s: calc(var(--u) * 1.1);
+  --x: -2.48;
+  --y: -0.62;
+}
+
+.sk-tb-pull {
+  --s: calc(var(--u) * 1.1);
+  --x: -0.62;
+  --y: -2.5;
+}
+
+.sk-tb-dive {
+  --s: calc(var(--u) * 1);
+  --x: -2.22;
+  --y: -2.05;
+}
+
+.sk-tb-climb {
+  --s: calc(var(--u) * 1);
+  --x: -3.8;
+  --y: -0.55;
+}
+
+/* M11: hidden until combat sets a handler (TouchControls.setAttackHandler). */
+.sk-tb-attack {
+  --s: calc(var(--u) * 1.05);
+  --x: -3.62;
+  --y: -1.95;
+  background-color: rgba(255, 106, 85, 0.9);
+}
+
+.sk-tb-reel {
+  --s: max(46px, calc(var(--u) * 0.8));
+  display: none;
+  font-size: calc(var(--u) * 0.42) !important;
+}
+
+.sk-touch.is-swinging .sk-tb-reel {
+  display: flex;
+}
+
+.sk-tb-reel-in {
+  --x: -0.5;
+  --y: -3.72;
+}
+
+.sk-tb-reel-out {
+  --x: -1.46;
+  --y: -3.42;
+}
+
+.sk-tb-pause {
+  left: calc(var(--sk-safe-l) + 12px);
+  top: calc(var(--sk-safe-t) + 10px);
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+}
+
+.sk-tb-pause svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* Touch HUD: speed and altitude top-left beside the pause button, a small map top-right. */
+.sk-is-touch .sk-readout {
+  left: calc(var(--sk-safe-l) + 70px);
+  top: calc(var(--sk-safe-t) + 10px);
+  bottom: auto;
+  transform: scale(0.58);
+  transform-origin: 0 0;
+}
+
+.sk-is-touch .sk-minimap {
+  top: calc(var(--sk-safe-t) + 12px);
+  right: calc(var(--sk-safe-r) + 16px);
+  bottom: auto;
+  border-width: 3px;
+}
+
+.sk-is-touch .sk-fps {
+  top: calc(var(--sk-safe-t) + 4.9rem);
+  right: auto;
+  left: calc(var(--sk-safe-l) + 14px);
+}
+
+.sk-is-touch .sk-top {
+  top: calc(var(--sk-safe-t) + 0.6rem);
+}
+
+/* No Esc key on a phone. */
+.sk-is-touch .sk-kbd-sm,
+.sk-is-touch .sk-resume {
+  display: none !important;
+}
+
+/* Touch: every control at least 44 px tall, sliders with a taller hit area. */
+.sk-is-touch .sk-btn,
+.sk-is-touch .sk-menu .sk-btn,
+.sk-is-touch .sk-actions .sk-btn.is-small,
+.sk-is-touch .sk-photo-actions .sk-btn,
+.sk-is-touch .sk-seg-opt,
+.sk-is-touch .sk-toggle {
+  min-height: 46px;
+}
+
+.sk-is-touch .sk-range {
+  height: 44px;
+}
+
+/* Touch controls card caption (a round on-screen button look). */
+.sk-tcap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.4rem;
+  min-height: 2.1rem;
+  padding: 0.25rem 0.75rem;
+  border: 2px solid var(--sk-ink);
+  border-radius: 1.1rem;
+  background: var(--sk-paper);
+  box-shadow: 2px 2px 0 var(--sk-ink);
+  color: var(--sk-ink);
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Portrait prompt (touch mode is landscape only). */
+.sk-rotate {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--sk-safe-t) + 1.5rem) calc(var(--sk-safe-r) + 1.5rem) calc(var(--sk-safe-b) + 1.5rem) calc(var(--sk-safe-l) + 1.5rem);
+  background-color: #0b0d10;
+  background-image: radial-gradient(rgba(15, 92, 99, 0.35) 1.2px, transparent 1.9px);
+  background-size: 9px 9px;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.sk-rotate.is-on {
+  display: flex;
+}
+
+.sk-rotate-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+  max-width: 22rem;
+  text-align: center;
+}
+
+.sk-rotate-icon {
+  width: 6rem;
+  height: 6rem;
+  color: var(--sk-amber);
+  animation: sk-turn 2.6s ease-in-out infinite;
+}
+
+.sk-rotate-title {
+  margin: 0;
+  color: var(--sk-amber);
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 2rem;
+  line-height: 1.05;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  -webkit-text-stroke: 0.06em var(--sk-ink);
+  paint-order: stroke fill;
+  text-shadow: 0.05em 0.05em 0 var(--sk-ink);
+}
+
+.sk-rotate-text {
+  margin: 0;
+  color: var(--sk-paper);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+@keyframes sk-turn {
+  0%,
+  20% {
+    transform: rotate(0deg);
+  }
+  50%,
+  80% {
+    transform: rotate(-90deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+/* ------------------------------------------- phone landscape (short screens) */
+
+@media (max-height: 520px) {
+  .sk-screen {
+    padding: calc(var(--sk-safe-t) + 1.9rem) calc(var(--sk-safe-r) + 0.9rem) calc(var(--sk-safe-b) + 0.9rem) calc(var(--sk-safe-l) + 0.9rem);
+  }
+
+  .sk-panel {
+    max-width: 100%;
+    padding: 2.3rem 1.4rem 1.1rem;
+  }
+
+  .sk-panel::before {
+    box-shadow: 6px 6px 0 var(--sk-ink);
+  }
+
+  .sk-title {
+    top: -1.35rem;
+    font-size: 1.5rem;
+  }
+
+  /* Main menu: smaller logo, Play on top and the other three in a row. */
+  .sk-screen-main {
+    padding-top: calc(var(--sk-safe-t) + 0.6rem);
+  }
+
+  .sk-logo {
+    font-size: clamp(2.6rem, 16vh, 5.6rem);
+  }
+
+  .sk-sunburst {
+    top: 2.4rem;
+  }
+
+  .sk-tagline {
+    margin: 0.6rem 0 0.9rem;
+    padding: 0.3rem 1.2rem;
+    font-size: 0.95rem;
+  }
+
+  .sk-main {
+    padding-bottom: 1.2rem;
+  }
+
+  .sk-main .sk-menu {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    width: min(36rem, calc(100vw - 2rem));
+    min-width: 0;
+  }
+
+  .sk-main .sk-menu > :first-child,
+  .sk-panel-pause .sk-menu > :first-child {
+    grid-column: 1 / -1;
+  }
+
+  .sk-menu .sk-btn {
+    min-height: 3.15rem;
+    padding: 0.6rem 0.9rem;
+    font-size: 1.2rem;
+  }
+
+  .sk-menu .sk-btn.is-big {
+    min-height: 3.4rem;
+    font-size: 1.55rem;
+  }
+
+  .sk-audio-hint {
+    margin-top: 0.8rem;
+    padding: 0.3rem 0.9rem;
+    font-size: 0.85rem;
+  }
+
+  .sk-credits {
+    bottom: calc(var(--sk-safe-b) + 0.3rem);
+    font-size: 0.7rem;
+  }
+
+  /* Pause: two columns under Resume. */
+  .sk-panel-pause {
+    width: min(32rem, 100%);
+    padding: 2.4rem 1.6rem 1.3rem;
+  }
+
+  .sk-panel-pause .sk-menu {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem 1rem;
+  }
+
+  .sk-st-row {
+    min-height: 2.9rem;
+  }
+
+  .sk-st-ctrl {
+    flex-basis: 12.5rem;
+  }
+
+  .sk-ctl-table td {
+    font-size: 0.88rem;
+  }
+
+  .sk-costumes {
+    gap: 0.8rem;
+  }
+
+  .sk-costume-art {
+    max-height: 30vh;
+  }
+
+  .sk-actions .sk-btn.is-small {
+    min-height: 3.15rem;
+  }
+}
+
+@media (max-height: 520px) and (min-width: 800px) {
+  .sk-st-cols,
+  .sk-ctl-tables {
+    grid-template-columns: 1fr 1fr;
+    gap: 0 1.6rem;
   }
 }

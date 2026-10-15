@@ -47,6 +47,8 @@ const RINGS: ReadonlyArray<readonly [number, number, number]> = [
  * use it to decide where to look before they click.
  */
 export class Targeting {
+  /** Aiming with touch controls: the magnetism rings use `tuning.aim.touchMagnetismDeg`. */
+  touchAim = false;
   private readonly hit: RayHit = makeRayHit();
   private readonly los: RayHit = makeRayHit();
   private readonly pt = { x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0 };
@@ -126,7 +128,7 @@ export class Targeting {
     swing.valid = false;
     zip.valid = false;
     this.aimRay(px, py, pz, aox, aoy, aoz, adx, ady, adz, false, swing, zip);
-    const mag = tuning.aim.magnetismDeg * DEG;
+    const mag = (this.touchAim ? tuning.aim.touchMagnetismDeg : tuning.aim.magnetismDeg) * DEG;
     if ((swing.valid && zip.valid) || mag <= 0) return;
     // Basis perpendicular to the aim (u horizontal unless looking straight up or down).
     let ux = -adz,

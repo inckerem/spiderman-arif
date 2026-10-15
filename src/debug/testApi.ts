@@ -27,8 +27,12 @@ import {
   momentFrames,
   momentRoof,
   momentState,
+  touchSpot,
+  aimAt,
+  planTarget,
   type BotInput,
 } from './testDrivers';
+import { makeAnchorResult } from '../player/targeting';
 
 declare global {
   interface Window {
@@ -167,6 +171,15 @@ export function installTestApi(game: Game, app?: App): void {
     /** Frames of play with the held input (the app's per-frame update drives the rooftop moment). */
     momentFrames: (seconds: number, sample = 0) => (app ? momentFrames(game, app, held, prev, seconds, sample) : null),
     updateLife: (dt = 1 / 60) => game.updateLife(dt),
+    /** Touch spec: a place to measure a control (the real-time loop keeps running). */
+    touchSpot: (kind: 'avenue' | 'wall' | 'air') => touchSpot(game, kind),
+    /** Points the crosshair at the best swing anchor in view; false when there is none. */
+    aimAtAnchor(): boolean {
+      const t = makeAnchorResult();
+      if (!planTarget(game, 0, t)) return false;
+      aimAt(game, t.x, t.y, t.z);
+      return true;
+    },
     simTiming(): { msPerTick: number; ticks: number } {
       return { msPerTick: game.simTimeMs / Math.max(1, game.simTicksMeasured), ticks: game.simTicksMeasured };
     },

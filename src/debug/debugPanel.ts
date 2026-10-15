@@ -15,19 +15,30 @@ export class DebugPanel {
   private build(): void {
     const gui = new GUI({ title: 'SKYTHREAD tuning (`)', width: 320 });
     gui.domElement.style.zIndex = '50';
-    const groups = tuning as unknown as Record<string, Record<string, number>>;
-    for (const group of Object.keys(groups)) {
+    // Groups become folders; nested groups (`enemies.<kind>`) become sub-folders.
+    type Node = { [key: string]: number | Node };
+    const addGroup = (parent: GUI, name: string, path: string, node: Node): void => {
       let folder: GUI | null = null;
-      for (const key of Object.keys(groups[group]!)) {
-        const meta = tuningMeta[`${group}.${key}`];
-        if (!meta) continue;
+      const ensure = (): GUI => {
         if (!folder) {
-          folder = gui.addFolder(group);
+          folder = parent.addFolder(name);
           folder.close();
         }
-        folder.add(groups[group]!, key, meta[0], meta[1], meta[2]);
+        return folder;
+      };
+      for (const key of Object.keys(node)) {
+        const v = node[key]!;
+        if (typeof v !== 'number') {
+          if (Object.keys(v).some((k) => tuningMeta[`${path}.${key}.${k}`])) addGroup(ensure(), key, `${path}.${key}`, v);
+          continue;
+        }
+        const meta = tuningMeta[`${path}.${key}`];
+        if (!meta) continue;
+        ensure().add(node, key, meta[0], meta[1], meta[2]);
       }
-    }
+    };
+    const groups = tuning as unknown as Node;
+    for (const group of Object.keys(groups)) addGroup(gui, group, group, groups[group] as Node);
     gui.add({ reset: () => { resetTuning(); gui.controllersRecursive().forEach((c) => c.updateDisplay()); } }, 'reset').name('Reset to defaults');
     this.onExtras?.(gui);
     this.gui = gui;
