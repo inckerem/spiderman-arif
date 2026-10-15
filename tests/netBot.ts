@@ -4,8 +4,9 @@
  * fill rooms with it.
  */
 import WebSocket from 'ws';
-import { decodeHeroStates, encodeHeroState, encodeMsg, parseServerMsg } from '../src/net/codec';
-import { HF, OP_STATES, PROTOCOL_VERSION, makeHeroSample, type ClientMsg, type HeroSample, type JoinRequest, type ServerMsg } from '../src/net/protocol';
+import { decodeEnemySnapshot, decodeHeroStates, encodeHeroState, encodeMsg, parseServerMsg } from '../src/net/codec';
+import { makeEnemySnap, type CombatEvent, type EnemySnap } from '../src/sim/types';
+import { HF, OP_ENEMIES, OP_STATES, PROTOCOL_VERSION, makeHeroSample, type ClientMsg, type HeroSample, type JoinRequest, type ServerMsg } from '../src/net/protocol';
 
 export type Welcome = Extract<ServerMsg, { t: 'welcome' }>;
 
@@ -28,6 +29,17 @@ export class NetBot {
   tp = 0;
   private welcomeAt = 0;
   readonly self: HeroSample = makeHeroSample();
+  /** Own hero position used by `startUpload` (moved by respawns and corrections, like a real client). */
+  readonly pos = { x: 0, y: 0, z: 0 };
+  /** Latest enemy snapshot and the local times snapshots arrived. */
+  readonly enemies: EnemySnap[] = [];
+  enemyCount = 0;
+  readonly snapshotTimes: number[] = [];
+  /** Every combat event received, in order. */
+  readonly combat: CombatEvent[] = [];
+  bytesIn = 0;
+  bytesOut = 0;
+  private upload: ReturnType<typeof setInterval> | null = null;
   private readonly scratch = makeHeroSample();
   private waiters: Array<() => void> = [];
 
@@ -35,9 +47,16 @@ export class NetBot {
     ws.binaryType = 'nodebuffer';
     ws.on('message', (data, isBinary) => {
       const buf = data as Buffer;
+      this.bytesIn += buf.byteLength;
       if (isBinary) {
         const b = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-        if (b[0] === OP_STATES) {
+        if (b[0] === OP_ENEMIES) {
+          const r = decodeEnemySnapshot(b, this.enemies, makeEnemySnap);
+          if (r) {
+            this.enemyCount = r.count;
+            this.snapshotTimes.push(performance.now());
+          }
+        } else if (b[0] === OP_STATES) {
           decodeHeroStates(b, this.scratch, (pid, s) => {
             const prev = this.remotes.get(pid);
             const copy = makeHeroSample();
@@ -49,6 +68,12 @@ export class NetBot {
         const m = parseServerMsg(buf.toString('utf8'));
         if (m) {
           this.msgs.push(m);
+          if (m.t === 'ce') {
+            for (const e of m.ev) {
+              this.combat.push(e);
+              if (e.e === 'respawn' && e.pid === this.pid) this.teleport(e.x, e.y, e.z);
+            }
+          } else if (m.t === 'correct') this.teleport(m.x, m.y, m.z);
           if (m.t === 'welcome') {
             this.welcome = m;
             this.welcomeAt = performance.now();
@@ -113,18 +138,49 @@ export class NetBot {
   }
 
   send(m: ClientMsg): void {
-    this.ws.send(encodeMsg(m));
+    const text = encodeMsg(m);
+    this.bytesOut += text.length;
+    this.ws.send(text);
   }
 
   sendRaw(data: string | Uint8Array): void {
     this.ws.send(data);
   }
 
+  /** A deliberate teleport (respawn, correction): new position, teleport counter bumped. */
+  teleport(x: number, y: number, z: number): void {
+    this.pos.x = x;
+    this.pos.y = y;
+    this.pos.z = z;
+    this.tp = (this.tp + 1) & 0xff;
+  }
+
+  /** Uploads `pos` at `hz` (20 Hz like the client) until stopped or closed. */
+  startUpload(hz = 20, extra?: () => Partial<HeroSample>): void {
+    this.stopUpload();
+    this.upload = setInterval(() => {
+      if (this.closed) return this.stopUpload();
+      this.state(this.pos.x, this.pos.y, this.pos.z, this.roomNow(), extra?.());
+    }, 1000 / hz);
+  }
+
+  stopUpload(): void {
+    if (this.upload) clearInterval(this.upload);
+    this.upload = null;
+  }
+
+  /** Room time in seconds (what intents carry), `lag` s in the past like a client's render time. */
+  viewT(lag = 0.1): number {
+    return this.roomNow() / 1000 - lag;
+  }
+
   /** Sends the own hero state at (x, y, z) with room time `t` (ms). */
   state(x: number, y: number, z: number, t: number, extra: Partial<HeroSample> = {}): void {
     const s = this.self;
     Object.assign(s, { seq: this.seq++ & 0xffff, t, x, y, z, flags: HF.GROUNDED, tp: this.tp, events: [] }, extra);
-    this.ws.send(encodeHeroState(s));
+    const b = encodeHeroState(s);
+    this.bytesOut += b.length;
+    this.ws.send(b);
   }
 
   of<T extends ServerMsg['t']>(t: T): Array<Extract<ServerMsg, { t: T }>> {
@@ -147,6 +203,7 @@ export class NetBot {
   }
 
   close(): Promise<void> {
+    this.stopUpload();
     if (this.closed) return Promise.resolve();
     this.ws.close(1000);
     return this.until(() => this.closed, 3000).catch(() => this.ws.terminate());
@@ -154,6 +211,7 @@ export class NetBot {
 
   /** Drops the connection without a close handshake (network loss). */
   cut(): void {
+    this.stopUpload();
     this.ws.terminate();
   }
 }

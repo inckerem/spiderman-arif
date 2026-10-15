@@ -7,22 +7,16 @@
  * Run: `npm run test:server` (or `npx playwright test tests/serverE2e.spec.ts`).
  */
 import { test, expect } from '@playwright/test';
-import { execSync, spawn, type ChildProcess } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { HERO_ID_BASE } from '../src/sim/types';
 import { NetBot } from './netBot';
+import { buildAll, startServerProc, type ServerProc } from './serverProc';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MAX_CONN_PER_IP = 24;
 
 test.describe.configure({ mode: 'serial' });
 
-let proc: ChildProcess;
+let srv: ServerProc;
 let base = '';
 let wsUrl = '';
-let log = '';
 const bots: NetBot[] = [];
 
 async function join(name: string, join?: Parameters<typeof NetBot.join>[1]['join'], token?: string): Promise<NetBot> {
@@ -38,45 +32,17 @@ async function health(): Promise<{ ok: boolean; rooms: number; players: number; 
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 test.beforeAll(async () => {
   test.setTimeout(300_000);
-  if (!fs.existsSync(path.join(ROOT, 'dist/index.html'))) execSync('npm run build', { cwd: ROOT, stdio: 'inherit' });
-  execSync('npm run build:server', { cwd: ROOT, stdio: 'inherit' });
-  proc = spawn(
-    process.execPath,
-    [
-      'dist-server/server.mjs',
-      '--port=0',
-      '--host=127.0.0.1',
-      '--static=dist',
-      '--test-hooks',
-      `--max-conn-per-ip=${MAX_CONN_PER_IP}`,
-      '--reconnect-grace-s=3',
-      '--private-room-idle-s=1',
-    ],
-    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PORT: '', STATIC_DIR: '' } },
-  );
-  proc.stdout!.on('data', (d) => (log += d));
-  proc.stderr!.on('data', (d) => (log += d));
-  const t0 = Date.now();
-  while (!/listening .*"port":(\d+)/.test(log)) {
-    if (Date.now() - t0 > 20_000 || proc.exitCode !== null) throw new Error(`server did not start:\n${log}`);
-    await sleep(50);
-  }
-  const port = Number(/listening .*"port":(\d+)/.exec(log)![1]);
-  base = `http://127.0.0.1:${port}`;
-  wsUrl = `ws://127.0.0.1:${port}/ws`;
+  buildAll();
+  srv = await startServerProc(['--static=dist', '--test-hooks', `--max-conn-per-ip=${MAX_CONN_PER_IP}`, '--reconnect-grace-s=3', '--private-room-idle-s=1']);
+  base = srv.base;
+  wsUrl = srv.wsUrl;
 });
 
 test.afterAll(async () => {
   await Promise.all(bots.map((b) => b.close()));
-  if (proc && proc.exitCode === null) {
-    const exited = new Promise((r) => proc.once('exit', r));
-    proc.kill('SIGTERM');
-    await Promise.race([exited, sleep(5000)]);
-    if (proc.exitCode === null) proc.kill('SIGKILL');
-  }
+  if (srv) await srv.stop();
 });
 
 test('healthz and static files', async () => {
@@ -157,7 +123,7 @@ test('16 fill public #1, the 17th lands in public #2, which closes when empty', 
   expect(first.of('join').some((j) => j.name === 'ayşe#2')).toBe(true);
 });
 
-test('private room: create with PvP, join by code, notFound, PvP only in private rooms', async () => {
+test('private room: create with PvP, join by code, notFound', async () => {
   const host = await join('Kurucu', { kind: 'create', pvp: true });
   const code = host.welcome!.room.code!;
   expect(code).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/);
@@ -167,14 +133,7 @@ test('private room: create with PvP, join by code, notFound, PvP only in private
   expect(guest.welcome!.players.map((p) => p.name)).toEqual(['Kurucu']);
   const lost = await join('Kayıp', { kind: 'code', code: 'ZZZZZZ' });
   expect(lost.rejected).toBe('notFound');
-  // A hero target is rejected in the public room, accepted in the private PvP room.
-  const pub = bots[0];
-  const strike = (seq: number) => ({ t: 'act' as const, i: { k: 'strike' as const, seq, target: HERO_ID_BASE + 2, move: 0, viewT: 1, hx: 0, hy: 0, hz: 0 } });
-  pub.send(strike(1));
-  await pub.until(() => pub.of('ce').some((c) => c.ev.some((e) => e.e === 'rej' && e.why === 'pvp')));
-  host.send(strike(2));
-  await sleep(200);
-  expect(host.of('ce').length).toBe(0);
+  // (Combat intents, PvP included, are covered by serverCombat.spec.ts.)
   // Test hooks are on for this server: accepted silently.
   host.send({ t: 'dbg', op: 'killAll', a: [] });
   await sleep(100);
@@ -236,11 +195,9 @@ test('connections per IP are capped; graceful shutdown', async () => {
   // SIGTERM: every bot gets kick 'shutdown' (1001) and the process exits 0.
   const live = bots.filter((b) => !b.closed);
   expect(live.length).toBeGreaterThan(10);
-  const exited = new Promise<number | null>((r) => proc.once('exit', (code) => r(code)));
-  proc.kill('SIGTERM');
-  expect(await exited).toBe(0);
+  expect(await srv.stop()).toBe(0);
   await Promise.all(live.map((b) => b.until(() => b.closed, 3000)));
   expect(live.every((b) => b.closeCode === 1001)).toBe(true);
   expect(live[0].of('kick').at(-1)).toEqual({ t: 'kick', why: 'shutdown' });
-  expect(log).toContain('shutting down');
+  expect(srv.log()).toContain('shutting down');
 });
