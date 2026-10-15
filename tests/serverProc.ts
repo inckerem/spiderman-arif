@@ -36,7 +36,10 @@ export async function startServerProc(args: string[]): Promise<ServerProc> {
   proc.stderr!.on('data', (d) => (log += d));
   const t0 = Date.now();
   while (!/listening .*"port":(\d+)/.test(log)) {
-    if (Date.now() - t0 > 30_000 || proc.exitCode !== null) throw new Error(`server did not start:\n${log}`);
+    if (Date.now() - t0 > 30_000 || proc.exitCode !== null) {
+      if (proc.exitCode === null) proc.kill('SIGKILL');
+      throw new Error(`server did not start (it must log "listening" at level info):\n${log}`);
+    }
     await sleep(50);
   }
   const port = Number(/listening .*"port":(\d+)/.exec(log)![1]);
