@@ -65,6 +65,8 @@ export interface MapDefinition {
      * points); `variant` picks between two shapes. Returns the point count.
      */
     route(L: CityLayout, ax: number, az: number, bx: number, bz: number, variant: boolean, out: XZ[]): number;
+    /** Whether a goal at (bx, bz) may be picked from (ax, az); absent = any. */
+    goalOk?(L: CityLayout, ax: number, az: number, bx: number, bz: number): boolean;
   };
   ringRoutes(L: CityLayout): RingRouteSpec[];
 }

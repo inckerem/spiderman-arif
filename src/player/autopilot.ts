@@ -337,16 +337,8 @@ export class Autopilot {
   teleports = 0;
   readonly stats: AutopilotStats = { legs: 0, zips: 0, wallRuns: 0, dives: 0, perches: 0, perchTries: 0, reroutes: 0, rescues: 0 };
   private readonly rng: Rng;
-  /** The leg to the goal along avenues and streets (up to 7 points with pond detours) and where the hero is on it. */
-  private readonly route: Array<[number, number]> = [
-    [0, 0],
-    [0, 0],
-    [0, 0],
-    [0, 0],
-    [0, 0],
-    [0, 0],
-    [0, 0],
-  ];
+  /** The leg to the goal, shaped by the map (Manhattan: avenues and streets, at most 7 points with pond detours; Istanbul: A* over the roads) and where the hero is on it. */
+  private readonly route: Array<[number, number]> = Array.from({ length: 32 }, () => [0, 0] as [number, number]);
   private routeN = 0;
   private readonly follow: RouteTarget = { seg: 0, x: 0, z: 0 };
   /** Hold Shift on the next wall touched (a wall run); otherwise walls are only brushed. */
@@ -668,6 +660,8 @@ export class Autopilot {
     const hs = Math.hypot(pl.vel.x, pl.vel.z);
     const rng = this.rng;
     let pick: Waypoint | null = null;
+    // Maps may rule out goals (Istanbul: never across open water).
+    const goalOk = getMap(this.layout.mapId).autopilot.goalOk;
     for (let tries = 0; tries < 60 && !pick; tries++) {
       const list = this.byKind[rng.weighted(KINDS, KIND_WEIGHTS)]!;
       if (list.length === 0) continue;
@@ -677,7 +671,12 @@ export class Autopilot {
       const d = Math.hypot(dx, dz);
       if ((d < LEG_MIN || d > LEG_MAX) && tries < 50) continue;
       if (hs > 6 && (dx * pl.vel.x + dz * pl.vel.z) / (d * hs) < -0.3 && tries < 30) continue;
+      if (goalOk && !goalOk(this.layout, p.x, p.z, w.x, w.z)) continue;
       pick = w;
+    }
+    if (!pick && goalOk) {
+      const ok = this.waypoints.filter((w) => goalOk(this.layout, p.x, p.z, w.x, w.z));
+      if (ok.length > 0) pick = ok[rng.int(0, ok.length - 1)]!;
     }
     if (!pick) pick = this.waypoints[rng.int(0, this.waypoints.length - 1)]!;
     Object.assign(this.goal, pick);

@@ -201,6 +201,8 @@ export function installTestApi(game: Game, app?: App): void {
       const t2 = performance.now();
       return { layoutMs: t1 - t0, collisionMs: t2 - t1, totalMs: t2 - t0, colliders: w.count, buildings: L.buildings.length };
     },
+    /** What the traversal bots must reach on this map (minimum city distance, tree-only park). */
+    routeExpect: () => getMap(game.mapId).routes.expect,
     /** The URL a map switch reloads to. */
     mapUrl: (id: string) => mapSwitchUrl(location.href, id as Parameters<typeof mapSwitchUrl>[1]),
     /** Touch spec: a place to measure a control (the real-time loop keeps running). */

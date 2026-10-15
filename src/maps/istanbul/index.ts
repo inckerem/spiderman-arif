@@ -4,6 +4,7 @@ import type { CityLayout } from '../../world/types';
 import { WP_PARK, WP_ROOF, WP_WATERFRONT, type MapDefinition, type Waypoint, type XZ } from '../types';
 import { IST_EXTENT, PENINSULA, EUROPE_N, ASIA } from './data';
 import { generateIstanbul, istanbulParts, istanbulTerrain } from './gen';
+import { istanbulRoute } from './autoroute';
 import { addPartColliders } from '../common/prims';
 
 /** Point-in-polygon (even-odd). */
@@ -25,7 +26,17 @@ function landmass(x: number, z: number): number {
   return -1;
 }
 
+/**
+ * Autopilot waypoints on the European side only: the Bosphorus has no low
+ * crossing with anchors (the 15 Temmuz deck is 64 m up), and a swing over
+ * 400 m of water would end in it.
+ */
 function waypoints(L: CityLayout, t: TerrainModel): Waypoint[] {
+  const all = allWaypoints(L, t);
+  return all.filter((w) => landmass(w.x, w.z) !== 2);
+}
+
+function allWaypoints(L: CityLayout, t: TerrainModel): Waypoint[] {
   const out: Waypoint[] = [];
   for (const b of L.buildings) {
     const v = b.volumes[b.volumes.length - 1]!;
@@ -59,40 +70,9 @@ function waypoints(L: CityLayout, t: TerrainModel): Waypoint[] {
   return out;
 }
 
-/**
- * Autopilot legs: straight, except that a leg between the peninsula and the
- * north crosses the Golden Horn on the Haliç Metro Bridge, and a leg to or
- * from the Asian shore crosses on the 15 Temmuz Bridge.
- */
-function route(_L: CityLayout, ax: number, az: number, bx: number, bz: number, _variant: boolean, out: XZ[]): number {
-  let n = 0;
-  const put = (x: number, z: number): void => {
-    if (n >= out.length) return;
-    out[n]![0] = x;
-    out[n]![1] = z;
-    n++;
-  };
-  put(ax, az);
-  const ma = landmass(ax, az),
-    mb = landmass(bx, bz);
-  if (ma >= 0 && mb >= 0 && ma !== mb) {
-    if (ma === 2 || mb === 2) {
-      // 15 Temmuz: west bank (x 420) <-> east bank (x 890) at z = -740.
-      const westFirst = ma !== 2;
-      if (westFirst && ma === 0) put(-275, 60), put(-275, -150);
-      put(westFirst ? 420 : 890, -740);
-      put(westFirst ? 890 : 420, -740);
-      if (!westFirst && mb === 0) put(-275, -150), put(-275, 60);
-    } else if (ma === 0) {
-      put(-275, 60);
-      put(-275, -150);
-    } else {
-      put(-275, -150);
-      put(-275, 60);
-    }
-  }
-  put(bx, bz);
-  return n;
+/** Autopilot legs: A* over the roads, the Golden Horn crossed on the Haliç Metro Bridge. */
+function route(L: CityLayout, ax: number, az: number, bx: number, bz: number, _variant: boolean, out: XZ[]): number {
+  return istanbulRoute(L, ax, az, bx, bz, out);
 }
 
 export const ISTANBUL: MapDefinition = {
@@ -155,6 +135,7 @@ export const ISTANBUL: MapDefinition = {
     ],
     expect: { minDistance: 1650, treeOnlyPark: true },
   },
-  autopilot: { waypoints, route },
+  // The attract hero keeps to the landmass it stands on: open water has nothing to swing from.
+  autopilot: { waypoints, route, goalOk: (_L, ax, az, bx, bz) => landmass(ax, az) === landmass(bx, bz) },
   ringRoutes: () => [],
 };
