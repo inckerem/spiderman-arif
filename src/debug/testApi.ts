@@ -33,6 +33,7 @@ import {
   type BotInput,
 } from './testDrivers';
 import { makeAnchorResult } from '../player/targeting';
+import { fillTickInput } from '../player/autopilot';
 import { ES_NAMES, type EnemyKind } from '../combat/types';
 import { combatComboTest, combatDodgeTest, combatLineTest, combatRoutingTest } from './combatDrivers';
 
@@ -76,6 +77,27 @@ export function installTestApi(game: Game, app?: App): void {
     },
     setInput(partial: Partial<BotInput>): void {
       Object.assign(held, partial);
+    },
+    /** Real-time loop (online tests): every tick takes the held input (setInput) instead of the keyboard; false restores it. */
+    realtimeInput(on: boolean): void {
+      if (on) {
+        const last = emptyBotInput();
+        game.injectInput = (out) => {
+          fillTickInput(out, held, last);
+          Object.assign(last, held);
+        };
+      } else game.injectInput = null;
+    },
+    /** Skip the final draw of every frame (simulation, network and animation still run); screenshots turn it back on. */
+    drawPaused(on: boolean): void {
+      game.drawPaused = on;
+    },
+    /** Start real-time play without the pointer lock (headless online tests). */
+    forcePlay(): void {
+      game.input.enabled = true;
+      game.playing = true;
+      game.view = 'play';
+      app?.ui.showClickToResume(false);
     },
     setLook(yaw: number, pitch: number): void {
       game.rig.setLook(yaw, pitch);

@@ -9,6 +9,7 @@ import type { Action } from './input/bindings';
 import { RooftopMoment } from './extras/rooftopMoment';
 import { tuning } from './config/tuning';
 import { TouchControls, detectTouchMode, type TouchButtonHandler } from './input/touch';
+import { Online } from './net/online';
 
 export type AppState = 'loading' | 'menu' | 'playing' | 'paused' | 'photo';
 
@@ -52,6 +53,10 @@ export class App {
   extraHud: ((hud: HudState) => void) | null = null;
   /** Standing still on a roof: night, rain and music (this client only). */
   moment!: RooftopMoment;
+  /** Online rooms (M12): lobby, network link, remote players. */
+  online!: Online;
+  /** City seed of this page (online rooms need their map's seed). */
+  seed = 0;
   private readonly hud: HudState = {
     speed: 0,
     altitude: 0,
@@ -98,7 +103,10 @@ export class App {
   private finisherSent = false;
   private attackHandler: TouchButtonHandler | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    private readonly uiRoot: HTMLElement,
+  ) {
     this.touchMode = detectTouchMode();
     this.ui = new UI(uiRoot, { touch: this.touchMode });
     if (this.touchMode) {
@@ -122,6 +130,7 @@ export class App {
 
   async boot(seed: number): Promise<void> {
     const ui = this.ui;
+    this.seed = seed;
     this.game = new Game({ seed, canvas: this.canvas, onProgress: (f, label) => ui.setLoading(f, label) });
     const game = this.game;
     await game.init();
@@ -133,6 +142,7 @@ export class App {
       game.player.targeting.touchAim = true;
     }
     this.moment = new RooftopMoment(game);
+    this.online = new Online(this, this.uiRoot);
     this.applySettings(ui.settings);
     this.wire();
     game.showMenu();
@@ -143,6 +153,10 @@ export class App {
     this.audio.setMenuMode(true);
     game.onFrame = (dt) => this.frame(dt);
     game.start();
+    // Invite link (?oda=CODE): straight to the lobby with the code filled in.
+    const invite = new URLSearchParams(location.search).get('oda');
+    if (invite) this.online.openLobby(invite);
+    if (import.meta.env.DEV) (window as unknown as { __net: unknown }).__net = this.online.testApi();
   }
 
   private wire(): void {
@@ -150,6 +164,7 @@ export class App {
     const game = this.game;
     const audio = this.audio;
     ui.onPlay = () => this.play();
+    ui.onMultiplayer = () => this.online.openLobby();
     ui.onResume = () => this.resume();
     ui.onMainMenu = () => this.toMainMenu();
     ui.onUiSound = (kind) => (kind === 'click' ? audio.uiClick() : audio.uiHover());
@@ -277,6 +292,7 @@ export class App {
 
   toMainMenu(): void {
     const game = this.game;
+    this.online.leave();
     game.input.exitLock();
     game.playing = false;
     game.input.enabled = false;
@@ -397,7 +413,8 @@ export class App {
         else this.enterPhoto();
         break;
       case 'timePause':
-        if (this.state === 'playing') {
+        if (this.state === 'playing' && this.online.active) this.ui.toast(tr.net.timeShared);
+        else if (this.state === 'playing') {
           game.dayNight.paused = !game.dayNight.paused;
           this.ui.toast(game.dayNight.paused ? tr.hud.timePaused : tr.hud.timeRunning);
         }
@@ -532,6 +549,7 @@ export class App {
       } else hud.ring = null;
       game.rings.markers(this.minimapRings);
       this.extraHud?.(hud);
+      this.online.frame(dt);
       ui.updateMinimap(pl.pos.x, pl.pos.z, game.rig.yaw, this.minimapRings);
     }
     ui.updateHud(hud);

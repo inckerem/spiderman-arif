@@ -218,6 +218,8 @@ export class Minimap {
   private pz = 0;
   private yaw = 0;
   private rings: readonly MinimapRing[] = [];
+  /** Other players in an online room (M12). */
+  private others: ReadonlyArray<{ x: number; z: number }> = [];
   private coneFill: CanvasGradient | null = null;
 
   constructor(
@@ -351,7 +353,35 @@ export class Minimap {
     // North marker first so ring markers near the rim stay on top of it.
     this.drawNorth(g, R, cos, sin, u);
     this.drawRings(g, R, k, cos, sin, u);
+    this.drawOthers(g, R, k, cos, sin, u);
     this.drawPlayer(g, R, u);
+  }
+
+  /** Other players online: cyan dots, pinned to the rim when out of range. */
+  setOthers(list: ReadonlyArray<{ x: number; z: number }>): void {
+    this.others = list;
+  }
+
+  private drawOthers(g: CanvasRenderingContext2D, R: number, k: number, cos: number, sin: number, u: number): void {
+    for (const o of this.others) {
+      const dx = o.x - this.px;
+      const dz = o.z - this.pz;
+      let sx = (dx * cos - dz * sin) * k;
+      let sy = (dx * sin + dz * cos) * k;
+      const dist = Math.hypot(sx, sy);
+      const lim = R - 6 * u;
+      if (dist > lim) {
+        sx *= lim / dist;
+        sy *= lim / dist;
+      }
+      g.beginPath();
+      g.arc(R + sx, R + sy, 3.4 * u, 0, TAU);
+      g.fillStyle = '#3ad6e8';
+      g.fill();
+      g.lineWidth = 1.6 * u;
+      g.strokeStyle = COL.ink;
+      g.stroke();
+    }
   }
 
   private drawRings(g: CanvasRenderingContext2D, R: number, k: number, cos: number, sin: number, u: number): void {

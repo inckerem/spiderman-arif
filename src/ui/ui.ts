@@ -82,7 +82,7 @@ export interface PhotoOptions {
   onExit: () => void;
 }
 
-type MenuScreen = 'main' | 'pause' | 'controls' | 'settings' | 'bindings' | 'costume';
+type MenuScreen = 'main' | 'pause' | 'controls' | 'settings' | 'bindings' | 'costume' | 'lobby';
 type SubScreen = 'controls' | 'settings' | 'bindings' | 'costume';
 type UiSound = 'click' | 'hover';
 type ControlRowId = (typeof tr.controls.rows)[number][0];
@@ -103,7 +103,7 @@ interface SliderSpec {
   format: (v: number) => string;
 }
 
-const SCREEN_NAMES: readonly MenuScreen[] = ['main', 'pause', 'controls', 'settings', 'bindings', 'costume'];
+const SCREEN_NAMES: readonly MenuScreen[] = ['main', 'pause', 'controls', 'settings', 'bindings', 'costume', 'lobby'];
 /** Movement keys in the order players read them ("W A S D"). */
 const MOVE_ACTIONS: readonly Action[] = ['forward', 'left', 'back', 'right'];
 /** Controls-screen rows whose keys come from the bindings; the others use tr.controls.fixedKeys. */
@@ -257,6 +257,8 @@ function bindingCaps(labels: readonly string[], joiner: string | null, note: str
  */
 export class UI {
   onPlay: () => void = noop;
+  /** Main menu "Çok Oyunculu" (M12). */
+  onMultiplayer: () => void = noop;
   onResume: () => void = noop;
   /** Touch: the rotate prompt's "play anyway" button. */
   onDismissRotate: () => void = noop;
@@ -284,6 +286,8 @@ export class UI {
   private readonly loadingStage: Text;
   private readonly menuLayer: HTMLDivElement;
   private readonly screens: Record<MenuScreen, HTMLDivElement>;
+  /** Pause menu slot for the online room panel. */
+  private readonly pauseExtra = el('div', 'sk-pause-extra');
   private readonly audioHint: HTMLElement;
   private readonly toastEl: HTMLDivElement;
   private readonly toastText: Text;
@@ -370,6 +374,8 @@ export class UI {
       settings: this.buildSettings(),
       bindings: this.buildBindings(),
       costume: this.buildCostume(),
+      // Filled by the multiplayer lobby (src/ui/lobby.ts).
+      lobby: el('div', 'sk-screen sk-screen-sub sk-screen-lobby'),
     };
     this.menuLayer = el('div', 'sk-menu-layer');
     for (const name of SCREEN_NAMES) this.menuLayer.append(this.screens[name]);
@@ -466,6 +472,39 @@ export class UI {
   }
 
   // ------------------------------------------------------------------ menus
+
+  // ------------------------------------------------------------ multiplayer
+
+  /** The lobby screen's element (the lobby fills it). */
+  get lobbyHost(): HTMLElement {
+    return this.screens.lobby;
+  }
+
+  /** Opens the lobby over the current screen (Back returns there). */
+  showLobby(): void {
+    if (this.screen !== null && this.screen !== 'lobby') this.backStack.push({ screen: this.screen, focus: null });
+    this.setScreen('lobby', null);
+  }
+
+  /** Back from the lobby (to the screen it was opened from). */
+  closeLobby(): void {
+    if (this.screen === 'lobby') this.back();
+  }
+
+  /** The online room panel in the pause menu (null removes it). */
+  setPauseExtra(node: HTMLElement | null): void {
+    this.pauseExtra.replaceChildren(...(node ? [node] : []));
+  }
+
+  /** A menu button with the UI's look and sounds. */
+  makeButton(label: string, variant: string, onClick: (b: HTMLButtonElement) => void): HTMLButtonElement {
+    return this.button(label, variant, onClick);
+  }
+
+  /** Other players on the minimap (online). */
+  setMinimapPlayers(list: ReadonlyArray<{ x: number; z: number }>): void {
+    this.minimap.setOthers(list);
+  }
 
   showMainMenu(): void {
     this.backStack.length = 0;
@@ -797,6 +836,7 @@ export class UI {
     const nav = el('nav', 'sk-menu');
     nav.append(
       this.button(tr.menu.play, 'is-primary is-big', () => this.runWithDefault(this.onPlay, () => this.hideMenus())),
+      this.button(tr.net.lobby.open, 'sk-btn-mp', () => this.onMultiplayer()),
       this.button(tr.menu.costume, '', (b) => this.openSub('costume', b)),
       this.button(tr.menu.controls, '', (b) => this.openSub('controls', b)),
       this.button(tr.menu.settings, '', (b) => this.openSub('settings', b)),
@@ -829,7 +869,7 @@ export class UI {
       nav.append(this.button(tr.menu.photo, '', () => this.onPhoto()), music);
     }
     nav.append(this.button(tr.menu.mainMenu, '', () => this.runWithDefault(this.onMainMenu, () => this.showMainMenu())));
-    panel.append(this.panelTitle(tr.menu.paused), nav);
+    panel.append(this.panelTitle(tr.menu.paused), this.pauseExtra, nav);
     screen.append(panel);
     return screen;
   }
