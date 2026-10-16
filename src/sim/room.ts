@@ -401,7 +401,8 @@ export class Room {
       if (since > NET.correctionResendS) return this.correct(slot, 'speed', recvMs);
       return STATE_DROPPED;
     }
-    const dt = Math.max(0, s.t - slot.lt) / 1000;
+    // Capped: going quiet for a while must not buy an arbitrarily long jump.
+    const dt = Math.min(NET.maxStateGapS, Math.max(0, s.t - slot.lt) / 1000);
     const d = dist(s.x, s.y, s.z, slot.lx, slot.ly, slot.lz);
     if (d <= NET.maxSpeed * dt + NET.speedSlack) return STATE_OK;
     if (s.tp === slot.ltp) return this.correct(slot, 'speed', recvMs);

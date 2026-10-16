@@ -402,6 +402,12 @@ test('clock sync picks the minimum-RTT sample and slews ≤ 5 ms/s', () => {
     prev = r;
   }
   expect(Math.abs(c.offset - OFFSET)).toBeLessThan(1);
+  // A busy page: the first estimate carries a 3 s round trip (1.4 s wrong); a good sample later fixes it at once.
+  const d = new ClockSync();
+  d.onPong(0, 2900 + OFFSET, 3000);
+  expect(Math.abs(d.offset - OFFSET)).toBeGreaterThan(1000);
+  for (let i = 1; i <= 6; i++) d.onPong(i * 2000, i * 2000 + 10 + OFFSET, i * 2000 + 20);
+  expect(Math.abs(d.offset - OFFSET)).toBeLessThan(1);
 });
 
 test('day clock and client hour pull (wrap aware)', () => {
@@ -446,6 +452,7 @@ test('interpolation buffer: between, extrapolate ≤ 150 ms, hold, wrap, snap', 
   expect(buf.sample(1000, out)).toBe(INTERP_AHEAD);
   expect(out.x).toBeCloseTo(200, 9);
   expect(buf.sample(950 + 400, out)).toBe(INTERP_HELD);
+  // (MIN_EXTRAPOLATE_GAP_MS: samples 50 ms apart here, so the velocity estimate is unchanged.)
   expect(out.x).toBeCloseTo(190 + 30, 9); // capped at 150 ms of extrapolation
   expect(buf.sample(0, out)).toBe(INTERP_HELD);
   expect(out.x).toBe(120);
@@ -530,10 +537,15 @@ test.describe('room', () => {
     expect(out.json(p, 'correct').at(-1)).toMatchObject({ why: 'teleport' });
     t += 50;
     expect(room.onState(p, sampleAt(x, 45, 0, t, 4), null, t)).toBe(STATE_OK);
+    // A long silence does not buy a long jump: the allowance counts at most NET.maxStateGapS.
+    t += 10_000;
+    expect(room.onState(p, sampleAt(x + 300, 45, 0, t, 4), null, t)).toBe(STATE_CORRECTED);
+    t += 50;
+    expect(room.onState(p, sampleAt(x, 45, 0, t, 5), null, t)).toBe(STATE_OK);
     // Teleport to the map spawn is always fine.
     const [sx, sy, sz] = map.layout.spawn;
     t += 50;
-    expect(room.onState(p, sampleAt(sx, sy, sz, t, 5), null, t)).toBe(STATE_OK);
+    expect(room.onState(p, sampleAt(sx, sy, sz, t, 6), null, t)).toBe(STATE_OK);
     // NaN and out of bounds.
     t += 50;
     expect(room.onState(p, sampleAt(NaN, 0, 0, t), null, t)).toBe(STATE_CORRECTED);

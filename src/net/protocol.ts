@@ -37,6 +37,8 @@ export const NET = {
   maxSpeed: 110,
   speedSlack: 2,
   teleportRadius: 80,
+  /** The time since the last accepted state counts for at most this long (s) in the speed allowance. */
+  maxStateGapS: 2,
   spawnRadius: 6,
   boundsMargin: 400,
   minY: -5,

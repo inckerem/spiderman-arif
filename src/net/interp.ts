@@ -11,6 +11,9 @@ export const RENDER_DELAY_S = 0.1;
 /** Longest extrapolation past the newest sample on an underrun (ms). */
 export const MAX_EXTRAPOLATE_MS = 150;
 
+/** Extrapolation estimates the velocity over at least this much time (ms). */
+export const MIN_EXTRAPOLATE_GAP_MS = 50;
+
 /** sample() results */
 export const INTERP_EMPTY = 0;
 export const INTERP_BETWEEN = 1;
@@ -108,7 +111,8 @@ export class InterpBuffer<T> {
         this.ops.copy(b, out);
         return ahead <= 0 ? INTERP_BETWEEN : INTERP_HELD;
       }
-      this.ops.lerp(a, b, 1 + ahead / (tb - ta), out);
+      // Two samples a moment apart (an extra upload) must not turn into a huge velocity.
+      this.ops.lerp(a, b, 1 + ahead / Math.max(tb - ta, MIN_EXTRAPOLATE_GAP_MS), out);
       return t - tb > this.maxExtrapolateMs ? INTERP_HELD : INTERP_AHEAD;
     }
     // Binary search for the pair around t.
