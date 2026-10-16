@@ -42,6 +42,22 @@ export function makeEnemySnap(): EnemySnap {
   return { id: 0, kind: 0, state: 0, x: 0, y: 0, z: 0, yaw: 0, hp: 0, guard: 0, anim: 0, animT: 0, flags: 0, target: 0 };
 }
 
+/** A hero's own combat state, sent to that player with every snapshot (times in sim seconds inside a sim, room seconds on the wire). */
+export interface HeroCombatSnap {
+  hp: number;
+  maxHp: number;
+  down: boolean;
+  downUntil: number;
+  combo: number;
+  comboUntil: number;
+  focus: number;
+  iframesUntil: number;
+}
+
+export function makeHeroCombatSnap(): HeroCombatSnap {
+  return { hp: 0, maxHp: 0, down: false, downUntil: 0, combo: 0, comboUntil: 0, focus: 0, iframesUntil: 0 };
+}
+
 /** Built once per map and shared by every room on it (server) or by the single local room (SP). */
 export interface MapRuntime {
   readonly id: MapId;
@@ -82,6 +98,8 @@ export interface RoomSim {
    * `radius`, at most `max`, nearest first. Returns n.
    */
   snapshot(x: number, y: number, z: number, radius: number, out: EnemySnap[], max: number): number;
+  /** The hero's own combat state (health, down, combo, focus, i-frames); false for an unknown hero. */
+  selfSnap(pid: number, out: HeroCombatSnap): boolean;
   /** Active crime events (sent in `welcome`). */
   crimeEvents(out: CrimeEventInfo[]): void;
   /** Current health of a hero (maxHp for an unknown one). */

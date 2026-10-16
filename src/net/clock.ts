@@ -14,14 +14,21 @@ export interface ClockSample {
 /**
  * Estimates room time from ping/pong pairs: keeps the last 8 samples and
  * targets the offset of the one with the smallest round trip (least queueing).
- * The applied offset jumps on the first sample, then slews at ≤ 5 ms per
- * second so room time never visibly jumps or runs backwards much.
+ * The applied offset follows the first few samples and large corrections
+ * directly, and slews small ones at ≤ 5 ms per second, so room time never
+ * visibly jumps or runs backwards much once settled.
  */
 export class ClockSync {
   static readonly SAMPLES = 8;
   static readonly SLEW_MS_PER_S = 5;
-  /** A target this far off (ms) is taken at once instead of slewed (e.g. after a long stall). */
-  static readonly SNAP_MS = 1000;
+  /**
+   * A target this far off (ms) is taken at once instead of slewed: the first
+   * estimates can carry a long round trip (a busy page), and a 5 ms/s slew
+   * would take minutes to undo that. Small refinements are slewed.
+   */
+  static readonly SNAP_MS = 100;
+  /** The first samples always set the offset directly. */
+  static readonly WARMUP = 4;
 
   readonly samples: ClockSample[] = [];
   /** Applied offset: roomNow = local + offset. */
@@ -47,7 +54,7 @@ export class ClockSync {
     for (const x of this.samples) if (x.rtt < best.rtt) best = x;
     this.target = best.offset;
     this.rtt = best.rtt;
-    if (!this.synced || Math.abs(this.target - this.offset) > ClockSync.SNAP_MS) {
+    if (!this.synced || this.samples.length < ClockSync.WARMUP || Math.abs(this.target - this.offset) > ClockSync.SNAP_MS) {
       this.offset = this.target;
       this.synced = true;
       this.lastLocal = local;

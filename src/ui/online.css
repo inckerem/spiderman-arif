@@ -1,0 +1,212 @@
+/* Multiplayer (M12): lobby, pause-menu room panel, name tags. Uses the menu tokens from styles.css. */
+
+.sk-lobby {
+  width: min(44rem, calc(100vw - 2rem));
+}
+
+.sk-lobby-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem 1.4rem;
+  margin: 0.4rem 0 1rem;
+}
+
+.sk-lobby-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.9rem 1rem 1rem;
+  border: 3px solid var(--sk-ink);
+  background: #fffaf0;
+  box-shadow: 4px 4px 0 var(--sk-ink);
+}
+
+.sk-lobby-card.is-wide {
+  grid-column: 1 / -1;
+}
+
+.sk-lobby-card h3 {
+  margin: 0;
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-size: 1.15rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.sk-lobby-card p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.sk-lobby label {
+  display: block;
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sk-lobby input[type='text'],
+.sk-lobby select {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.3rem;
+  padding: 0.5rem 0.65rem;
+  border: 3px solid var(--sk-ink);
+  background: #fff;
+  color: var(--sk-ink);
+  font: 700 1.05rem/1.2 var(--sk-font-body);
+  outline: none;
+}
+
+.sk-lobby input[type='text']:focus,
+.sk-lobby select:focus {
+  box-shadow: 0 0 0 3px var(--sk-amber);
+}
+
+.sk-lobby input.sk-code {
+  font-family: var(--sk-font-head);
+  font-size: 1.4rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+}
+
+.sk-lobby-msg {
+  min-height: 1.2em;
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #5b5348;
+}
+
+.sk-lobby-msg.is-bad {
+  color: #c43a2a;
+}
+
+.sk-lobby-status {
+  min-height: 1.4em;
+  margin: 0 0 0.8rem;
+  font-weight: 800;
+  color: #c43a2a;
+}
+
+.sk-lobby-status.is-busy {
+  color: var(--sk-teal);
+}
+
+.sk-lobby .sk-btn {
+  width: 100%;
+}
+
+.sk-lobby .sk-btn[disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  .sk-lobby-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Pause menu: the room panel above the menu buttons. */
+.sk-room {
+  margin: 0 0 1.1rem;
+  padding: 0.75rem 0.9rem;
+  border: 3px solid var(--sk-ink);
+  background: #fffaf0;
+  box-shadow: 4px 4px 0 var(--sk-ink);
+  max-width: 24rem;
+}
+
+.sk-room-name {
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sk-room-code {
+  margin: 0.2rem 0;
+  font-family: var(--sk-font-head);
+  font-size: 1.5rem;
+  letter-spacing: 0.3em;
+}
+
+.sk-room-meta {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #5b5348;
+}
+
+.sk-room-list {
+  margin: 0.5rem 0 0.7rem;
+  padding: 0;
+  list-style: none;
+  font-weight: 700;
+  font-size: 0.95rem;
+  max-height: 9rem;
+  overflow: auto;
+}
+
+.sk-room-list li::before {
+  content: '';
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.45rem;
+  border: 2px solid var(--sk-ink);
+  background: #3ad6e8;
+}
+
+.sk-room-list li.is-self::before {
+  background: var(--sk-amber);
+}
+
+.sk-room .sk-btn {
+  width: 100%;
+  margin-top: 0.45rem;
+}
+
+.sk-room .sk-btn .sk-btn-label {
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+  white-space: normal;
+}
+
+/* Name tags over remote heroes (below the menus and HUD panels). */
+.sk-nametags {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.sk-nametag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  padding: 0.12rem 0.5rem;
+  border: 2px solid var(--sk-ink);
+  background: rgba(244, 239, 230, 0.92);
+  color: var(--sk-ink);
+  font: 900 0.85rem/1.1 var(--sk-font-head);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  transform-origin: 50% 100%;
+}
+
+.sk-nametag.is-on {
+  display: block;
+}
+
+.sk-cine .sk-nametags,
+.sk-menu-open .sk-nametags {
+  display: none;
+}

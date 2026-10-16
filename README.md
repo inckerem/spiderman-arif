@@ -40,9 +40,23 @@ npm run preview      # http://127.0.0.1:4173
 
 Behind the main menu the hero swings through the city on autopilot, filmed by a cinematic camera that cuts between chase, side, low-angle, aerial and orbit shots (attract mode; not playable). Click **Oyna** (Play) to start: the hero begins on the spawn roof and the game captures the mouse (pointer lock; on phones see below). Audio starts after the first click or key press. Press `Esc` to pause; **Ana Menü** in the pause menu goes back to the attract mode. URL parameter `?seed=1234` generates a different city.
 
+### Playing online
+
+**Çok Oyunculu** in the main menu opens the lobby. Type a player name (3-16 characters: letters including Turkish ones, digits, space, `_ . -`; it is remembered in the browser, and a name already in the room gets `#2`), pick the map, then:
+
+- **Herkese Açık Odaya Katıl**: the public room of that map, shared with everyone who picks it (16 players per room; a full room opens "#2").
+- **Özel Oda Kur**: a private room with a 6-character code; switch on **Oyuncular birbirine vurabilir (PvP)** to let players hit each other (only private rooms allow it).
+- **Koda Katıl**: join a private room by its code.
+
+In a private room, the pause menu (Esc) shows the code, the players and **Davet bağlantısını kopyala**, which copies an invite link such as `https://oyun.example.com/?oda=K7P2QX`; opening it goes straight to the lobby with the code filled in. **Odadan Ayrıl** leaves the room.
+
+Online, everyone sees the other heroes swing with their own web lines and costumes, with name tags; enemies, crime events and health come from the server; the time of day is shared by the room (the hour keys, T and Y are off; the rooftop moment's night and rain stay on your screen only and end at the room's hour); pausing opens the menu while the game goes on, and your hero is left alone by enemies until you continue. A dropped connection reconnects by itself within 30 s. If the server cannot be reached, the game starts single player ("Sunucuya ulaşılamadı, tek oyunculu başlıyor"). Online play uses the standard city, so a page opened with `?seed=` asks to be reopened without it.
+
+To play together on a home network, start the launcher with `--sunucu` (see Options above) and open the address it prints on the other devices.
+
 ### Multiplayer server (development)
 
-Multiplayer (M12) runs on a small Node.js game server in `server/` that shares the protocol and room code in `src/net/` and `src/sim/` with the client. The server, its rooms and the server-side combat (the same combat simulation as single player) are in place; the in-game multiplayer menu and remote heroes come in a later step, so the game itself still plays single player.
+Multiplayer (M12) runs on a small Node.js game server in `server/` that shares the protocol and room code in `src/net/` and `src/sim/` with the client; enemies, health and hits run there with the same combat simulation as single player.
 
 ```bash
 npm run server:test  # builds dist-server/server.mjs and runs it on 127.0.0.1:8787 (no static files, test hooks on)
@@ -190,6 +204,7 @@ npx playwright test tests/soak.spec.ts   # 30 simulated minutes (long)
 npm run test:quick               # smoke test only
 npm run test:server              # game server checks in Node (no browser, no dev server)
 npm run test:server:load         # server load test: 16 bots + 30 enemies in one room, then 10 rooms (about 2 min)
+SKYTHREAD_SERVER_PORT=8797 npx playwright test tests/net.spec.ts --workers=1   # online play in browsers (starts its game server)
 ```
 
 | Test | Checks |
@@ -211,6 +226,7 @@ npm run test:server:load         # server load test: 16 bots + 30 enemies in one
 | `server.spec.ts` | Node only: protocol codec round trips (hero states with every block and event, enemy snapshots within 5 cm), message validation, names and the profanity filter (leetspeak, allow list, `#2` suffixes), room codes (no ambiguous characters, 10 000 unique), clock sync and interpolation, the shared Room (relay, 110 m/s sanity check, corrections and the kick, reconnect grace, shared clock, PvP gating, combat hook), RoomManager (16 per public room, overflow into #2, private codes), rate limits, sessions, and that the shared net/sim modules stay pure |
 | `serverE2e.spec.ts` | Builds and starts `dist-server/server.mjs` serving `dist/` on a free port: `/healthz`, static files and caching, raw WebSocket bots that see each other's movement, 17 bots (the 17th lands in public #2), private room by code, PvP only in private rooms, cheat correction and kick, reconnect with the token, oversize and garbage frames, connections per IP, graceful shutdown |
 | `serverCombat.spec.ts` | The built server runs the combat sim: bots spawn enemies through the test hooks, get enemy snapshots at about 15 Hz, strike (hit; `rate`, `time` and `range` rejections), take damage, go down and respawn on a roof the server accepts; PvP only in a private PvP room (Room + wire vs bare `CombatSim` hash parity is in `server.spec.ts`) |
+| `net.spec.ts` | Online play in two or three browser contexts against a real game server (`SKYTHREAD_SERVER_PORT`, the dev server's `/ws` proxy target): players see each other's position (within 0.5 m), web line and name tag; shared hour; no PvP hit in a public room; reconnect after a dropped socket keeps the player; honest movement is never corrected while a teleport cheat is; private room by invite link and typed code with the pause-menu panel, a PvP hit, a shared enemy with the same health on both clients; single-player fallback without a server |
 
 Numbers from each run are written to `test-results/*.json`. Software GL in a sandbox does not represent real GPU frame rates, so the suite measures simulation time per tick, draw calls, triangles and memory instead of FPS.
 

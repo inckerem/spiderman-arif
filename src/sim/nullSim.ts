@@ -4,7 +4,7 @@
  * anyone. Every targeted intent is rejected with `state` (there is nothing to
  * hit); the real rules live in CombatSim (`combatRoomSim.ts`). PURE.
  */
-import type { CombatEvent, CombatIntent, CrimeEventInfo, DebugOp, EnemySnap, HeroState, RoomSim } from './types';
+import type { CombatEvent, CombatIntent, CrimeEventInfo, DebugOp, EnemySnap, HeroCombatSnap, HeroState, RoomSim } from './types';
 
 export const SIM_HZ = 30;
 export const SIM_DT = 1 / SIM_HZ;
@@ -45,6 +45,15 @@ export class NullSim implements RoomSim {
 
   snapshot(_x: number, _y: number, _z: number, _radius: number, _out: EnemySnap[], _max: number): number {
     return 0;
+  }
+
+  selfSnap(pid: number, out: HeroCombatSnap): boolean {
+    if (!this.heroes.has(pid)) return false;
+    out.hp = out.maxHp = MAX_HP;
+    out.down = false;
+    out.downUntil = out.comboUntil = out.iframesUntil = -1e9;
+    out.combo = out.focus = 0;
+    return true;
   }
 
   crimeEvents(_out: CrimeEventInfo[]): void {}

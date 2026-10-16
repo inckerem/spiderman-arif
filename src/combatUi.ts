@@ -109,7 +109,7 @@ export class CombatUi {
       return;
     }
     const view = game.combatView;
-    const link = game.combatLink;
+    const link = game.link;
     const now = link.now();
     const self = view.self;
     const pl = game.player;
@@ -237,7 +237,7 @@ export class CombatUi {
         break;
       }
       case 'down':
-        if (e.pid === game.combatLink.selfPid) {
+        if (e.pid === game.link.selfPid) {
           a.combat('heroDown');
           this.moment.interrupt();
         }
@@ -251,7 +251,7 @@ export class CombatUi {
         this.known.delete(e.id);
         if (!ev) break;
         const type = ev.type;
-        const mine = e.pids.indexOf(game.combatLink.selfPid) >= 0;
+        const mine = e.pids.indexOf(game.link.selfPid) >= 0;
         if (e.result === 'clear') {
           if (mine) this.score += e.score;
           this.queue({ kind: 'clear', title: tr.combat.cleared, sub: mine ? tr.combat.reward(e.focus, e.score) : this.eventName(ev), type, sound: 'eventClear' });

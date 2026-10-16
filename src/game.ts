@@ -45,6 +45,7 @@ import { fillHeroState } from './combat/client/heroState';
 import { EnemyRenderer } from './combat/render/enemyRenderer';
 import { HeroCombat } from './combat/client/heroCombat';
 import { EventBeacons } from './combat/render/eventBeacons';
+import { SwitchLink } from './net/switchLink';
 import type { CombatEvent } from './combat/types';
 
 export interface GameOptions {
@@ -143,6 +144,14 @@ export class Game {
   /** Single player's combat room: the pure sim, stepped at 30 Hz through the local link. */
   combatSim!: CombatSim;
   combatLink!: LocalCombatLink;
+  /** The link the game plays through: `combatLink`, or a NetLink while in an online room (M12). */
+  link!: SwitchLink;
+  /** Online: hour keys and fast-forward are off (the room owns the clock); called instead. */
+  hourLock: (() => void) | null = null;
+  /** Tests with several software-rendered pages: everything but the final draw runs. */
+  drawPaused = false;
+  /** Called every rendered frame before the scene is drawn (remote heroes, name tags). */
+  onBeforeRender: ((dt: number) => void) | null = null;
   /** What the client knows about combat (the link's messages): enemies, own health, threats. */
   combatView!: CombatView;
   /** Temporary enemy visuals (chunk 5 brings the rigs). */
@@ -220,7 +229,8 @@ export class Game {
     this.combatView = new CombatView();
     this.combatLink = new LocalCombatLink(this.combatSim, this.combatView);
     this.enemyRender = new EnemyRenderer(this.particles);
-    this.heroCombat = new HeroCombat(this.player, this.world, this.combatLink);
+    this.link = new SwitchLink(this.combatLink);
+    this.heroCombat = new HeroCombat(this.player, this.world, this.link);
     this.beacons = new EventBeacons();
     this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
@@ -388,7 +398,7 @@ export class Game {
 
   /** Upload the hero to the combat room, advance it (30 Hz inside), sample the view and handle what arrived. */
   private stepCombat(dt: number): void {
-    const link = this.combatLink;
+    const link = this.link;
     link.tick(dt, fillHeroState(this.player, false, this.heroSample));
     this.combatView.update(link.now(), link.renderTime());
     const evs = this.combatEvents;
@@ -411,6 +421,14 @@ export class Game {
   setCrimeEvents(on: boolean): void {
     this.crimeEvents = on;
     this.combatSim.scheduler = this.combatSim.roaming = on && !this.loop.manual;
+  }
+
+  /** Move the hero (a server correction): no interpolation across the jump, camera snapped. */
+  teleportHero(x: number, y: number, z: number): void {
+    this.player.teleport(x, y, z);
+    this.prevPos.copy(this.player.pos);
+    this.renderPos.copy(this.player.pos);
+    this.rig.snap();
   }
 
   /** A fresh combat room: no enemies, full health (a new game, tests). */
@@ -530,7 +548,7 @@ export class Game {
       this.updateCamera(frameDt);
       this.updateHero(frameDt);
       this.updateLife(frameDt);
-      this.timeFast = this.input.enabled && this.input.isHeld('timeFast');
+      this.timeFast = !this.hourLock && this.input.enabled && this.input.isHeld('timeFast');
       if (!this.dayNight.paused) this.dayNight.advance(frameDt, this.timeFast ? tuning.time.fastForwardRate : 1);
     } else {
       // Paused under a menu: the frame holds still.
@@ -625,7 +643,7 @@ export class Game {
     this.time += dt;
     // Enemies show in play (and photos of it), not behind the menu.
     this.enemyRender.group.visible = this.view !== 'menu';
-    if (this.view !== 'menu') this.enemyRender.update(this.combatView, this.rig.camera, this.combatLink.renderTime(), this.combatEnabled ? this.renderPos : null);
+    if (this.view !== 'menu') this.enemyRender.update(this.combatView, this.rig.camera, this.link.renderTime(), this.combatEnabled ? this.renderPos : null);
     this.beacons.update(this.view !== 'menu' && this.combatEnabled ? this.combatView.crimes : null, this.rig.camera, this.time);
     shared.uTime.value = this.time;
     const wx = this.weather;
@@ -660,6 +678,8 @@ export class Game {
     }
     const sp = this.player.speed;
     this.post.speedLines = this.view === 'play' ? smoothstep(32, 60, sp) * (this.player.mode === 0 ? 0 : 1) : 0;
+    this.onBeforeRender?.(dt);
+    if (this.drawPaused) return;
     this.renderer.info.reset();
     this.post.render(this.scene, this.rig.camera, this.time);
     this.frameStats.calls = this.renderer.info.render.calls;
@@ -713,6 +733,10 @@ export class Game {
   private onKey(code: string): void {
     if (code === 'Backquote') this.debug.toggle();
     if (!this.playing) return;
+    if (this.hourLock && (code === 'Digit1' || code === 'Digit2' || code === 'Digit3' || code === 'Digit4')) {
+      this.hourLock();
+      return;
+    }
     if (code === 'Digit1') this.dayNight.setHour(6.4);
     if (code === 'Digit2') this.dayNight.setHour(12);
     if (code === 'Digit3') this.dayNight.setHour(18.6);

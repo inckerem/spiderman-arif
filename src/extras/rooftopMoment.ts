@@ -42,6 +42,8 @@ export class RooftopMoment {
   readonly stats = { starts: 0, ends: 0, bolts: 0 };
   /** Thunder after a lightning flash (closeness 0..1). */
   onThunder: ((closeness: number) => void) | null = null;
+  /** Online (M12): the hour to return to is the room's current hour, not the saved one. */
+  restoreHour: (() => number) | null = null;
   /** The moment begins (the app restarts the music from the top). */
   onStart: (() => void) | null = null;
   /** Live play since the last spawn, respawn or new game (s), distance walked or flown (m), a line used. */
@@ -122,10 +124,14 @@ export class RooftopMoment {
     }
   }
 
+  private restoreBase(): number {
+    return this.restoreHour ? this.restoreHour() : this.savedHour;
+  }
+
   /** Ends at once, restoring everything (leaving to the main menu, a new game). */
   cancel(): void {
     if (this.running) {
-      if (!this.hourTaken) this.game.dayNight.setHour(this.savedHour);
+      if (!this.hourTaken) this.game.dayNight.setHour(this.restoreBase());
       this.finish();
     }
     this.phase = 'idle';
@@ -248,14 +254,14 @@ export class RooftopMoment {
     const g = this.game;
     const t = this.t;
     const back = smoothstep(0, 1, clamp(t / M.hourBackSeconds, 0, 1));
-    if (!this.hourTaken) g.dayNight.setHour(this.savedHour + this.outFrom * (1 - back));
+    if (!this.hourTaken) g.dayNight.setHour(this.restoreBase() + this.outFrom * (1 - back));
     g.weather.rain = this.rainFrom * (1 - clamp(t / M.rainOutSeconds, 0, 1));
     g.weather.mood = this.moodFrom * (1 - back);
     g.cineOrbit = this.orbitFrom * (1 - smoothstep(0, 1, clamp(t / M.orbitOutSeconds, 0, 1)));
     this.thunderT = -1;
     this.lightning(dt);
     if (t >= Math.max(M.hourBackSeconds, M.rainOutSeconds, M.orbitOutSeconds)) {
-      if (!this.hourTaken) g.dayNight.setHour(this.savedHour);
+      if (!this.hourTaken) g.dayNight.setHour(this.restoreBase());
       this.finish();
       this.phase = 'idle';
       this.idleT = 0;

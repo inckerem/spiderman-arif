@@ -30,7 +30,9 @@ import {
 import { SIM_DT, SIM_HZ } from './nullSim';
 import {
   makeEnemySnap,
+  makeHeroCombatSnap,
   type CombatEvent,
+  type HeroCombatSnap,
   type CombatIntent,
   type CrimeEventInfo,
   type DebugOp,
@@ -91,7 +93,7 @@ export interface Slot {
   readonly corrections: number[];
   /** Round trip (ms) as measured by the host. */
   rtt: number;
-  /** Enemies in the last snapshot sent (an empty one is sent once to clear). */
+  /** Enemies in the last snapshot sent. */
   lastSnapCount: number;
 }
 
@@ -147,6 +149,7 @@ export class Room {
   private readonly sendPackets: Uint8Array[] = [];
   private readonly writer = new ByteWriter(2048);
   private readonly respawn = { x: 0, y: 0, z: 0 };
+  private readonly selfBuf = makeHeroCombatSnap();
 
   constructor(
     cfg: RoomConfig,
@@ -398,7 +401,8 @@ export class Room {
       if (since > NET.correctionResendS) return this.correct(slot, 'speed', recvMs);
       return STATE_DROPPED;
     }
-    const dt = Math.max(0, s.t - slot.lt) / 1000;
+    // Capped: going quiet for a while must not buy an arbitrarily long jump.
+    const dt = Math.min(NET.maxStateGapS, Math.max(0, s.t - slot.lt) / 1000);
     const d = dist(s.x, s.y, s.z, slot.lx, slot.ly, slot.lz);
     if (d <= NET.maxSpeed * dt + NET.speedSlack) return STATE_OK;
     if (s.tp === slot.ltp) return this.correct(slot, 'speed', recvMs);
@@ -514,13 +518,21 @@ export class Room {
     if (shared) this.broadcast({ t: 'ce', ev: shared });
   }
 
+  /** Every connected hero gets the nearest enemies and its own combat state (15 Hz). */
   private sendSnapshots(nowMs: number): void {
+    const me = this.selfBuf;
     for (const s of this.players.values()) {
       if (!s.connected || !s.hasState) continue;
       const n = this.sim.snapshot(s.hero.x, s.hero.y, s.hero.z, NET.snapshotRadius, this.snaps, NET.snapshotMax);
-      if (n === 0 && s.lastSnapCount === 0) continue;
       s.lastSnapCount = n;
-      this.out.send(s.pid, encodeEnemySnapshot(nowMs, this.snaps, n, this.writer));
+      let self: HeroCombatSnap | null = null;
+      if (this.sim.selfSnap(s.pid, me)) {
+        me.downUntil = this.toRoom(me.downUntil);
+        me.comboUntil = this.toRoom(me.comboUntil);
+        me.iframesUntil = this.toRoom(me.iframesUntil);
+        self = me;
+      }
+      this.out.send(s.pid, encodeEnemySnapshot(nowMs, this.snaps, n, this.writer, self));
     }
   }
 

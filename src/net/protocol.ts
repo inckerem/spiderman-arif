@@ -37,6 +37,8 @@ export const NET = {
   maxSpeed: 110,
   speedSlack: 2,
   teleportRadius: 80,
+  /** The time since the last accepted state counts for at most this long (s) in the speed allowance. */
+  maxStateGapS: 2,
   spawnRadius: 6,
   boundsMargin: 400,
   minY: -5,
@@ -160,7 +162,7 @@ export const HB = {
 /**
  * Hero events carried inside a state packet. Every `PlayerEvent` variant
  * (player/player.ts) has the same shape here, so a client can forward
- * `player.events` as is; strike/dodge/hurt/down/revive are the M11 additions.
+ * `player.events` as is (M11 added lunge, lungeEnd, strike, dodge, hurt, down and revive).
  */
 export type NetEvent =
   | { type: 'jump' }
@@ -179,6 +181,8 @@ export type NetEvent =
   | { type: 'splash'; x: number; y: number; z: number }
   | { type: 'respawn' }
   | { type: 'recover' }
+  | { type: 'lunge' }
+  | { type: 'lungeEnd'; ok: boolean }
   | { type: 'strike'; move: number }
   | { type: 'dodge' }
   | { type: 'hurt'; dmg: number }
@@ -205,9 +209,11 @@ export interface HeroSample {
   blocks: number;
   /** Bumped by the client on every deliberate teleport (respawn, water, recovery, server correction); u8, wraps. */
   tp: number;
-  /** Combat animation action id (0 = none) and its age (s). */
+  /** Combat animation overlay (`CA` action, 0 = none): side, age and length (s). */
   action: number;
+  actionSide: number;
   actionT: number;
+  actionDur: number;
   ax: number;
   ay: number;
   az: number;
@@ -226,7 +232,7 @@ export interface HeroSample {
 export function makeHeroSample(): HeroSample {
   return {
     seq: 0, t: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, facing: 0, mode: 0, flags: 0, blocks: 0, tp: 0,
-    action: 0, actionT: 0, ax: 0, ay: 0, az: 0, zx: 0, zy: 0, zz: 0, wnx: 0, wnz: 0, wrun: 0,
+    action: 0, actionSide: 0, actionT: 0, actionDur: 0, ax: 0, ay: 0, az: 0, zx: 0, zy: 0, zz: 0, wnx: 0, wnz: 0, wrun: 0,
     travKind: 0, travT: 0, travDur: 0, events: [],
   };
 }
