@@ -90,6 +90,17 @@ export const ANIM = {
   KO: 11,
   TAUNT: 12,
   STRAFE: 13,
+  /** Gunman aiming (laser sight on), firing a burst. */
+  AIM: 14,
+  SHOOT: 15,
+  /** Brute: head-down charge (the dash after its wind-up). */
+  CHARGE: 16,
+  /** Thug: bottle wind-up and throw. */
+  THROW: 17,
+  /** Brute: a frontal hit bounced off the raised shield. */
+  BLOCK: 18,
+  /** Drone: cruising flight. */
+  HOVER: 19,
 } as const;
 
 /** Entity ids: enemies 1..0x7fff, heroes 0x8000 + pid (PvP targets). */

@@ -121,7 +121,7 @@ The game also works under a path instead of a subdomain (asset paths are relativ
 | Esc | Pause menu |
 | ` (backtick) | Debug and tuning panel |
 
-Combat is being built (M11): enemies do not appear in normal play yet. In a dev build (`npm run dev`), `__game.combat.spawnAhead(0, 8)` in the browser console spawns a thug 8 m ahead (`1` for a bat thug); enemies show as coloured capsules until their models arrive.
+Combat is being built (M11): enemies do not appear in normal play yet. In a dev build (`npm run dev`), `__game.combat.spawnAhead(0, 8)` in the browser console spawns a thug 8 m ahead (`1` for a bat thug, `2` a gunman, `3` a shielded brute, `4` a drone).
 
 These are the default keys. Every action except Esc, mouse look, the wheel, 1–4 and ` can be rebound under **Ayarlar > Tuş atamaları** (Settings > Key bindings): two keys or mouse buttons per action, saved in the browser. The controls screen and the photo panel always show the current keys, named after the player's keyboard layout (Turkish Q and F layouts included).
 

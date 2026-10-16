@@ -449,7 +449,18 @@ test.describe('mobile', () => {
     await fingers.drag(moveId, 0, -0.93 * R, 4);
     await page.waitForFunction(() => (window as any).__game.game.player.mode === 4, null, { timeout: 15_000 });
     const w0 = await player(page);
-    await page.waitForTimeout(800);
+    // 0.8 s of simulation, not of wall-clock time: the loop drops time on frames
+    // over 100 ms (FixedLoop), and software GL on a loaded machine renders at
+    // ~2 fps, so 800 ms of real time can hold one climb frame or none.
+    const tick0 = await page.evaluate(() => (window as any).__game.game.ticks as number);
+    await page.waitForFunction(
+      (t) => {
+        const g = (window as any).__game;
+        return (g.game.ticks as number) >= t + Math.round(0.8 * g.tuning.sim.tickRate);
+      },
+      tick0,
+      { timeout: 30_000 },
+    );
     const w1 = await player(page);
     await fingers.up(climbId);
     await page.waitForFunction(() => (window as any).__game.game.player.mode !== 4, null, { timeout: 10_000 });
