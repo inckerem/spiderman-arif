@@ -157,6 +157,7 @@ export class Online {
     this.link = link;
     game.link.target = link;
     game.combatView.reset();
+    game.enemyRender.reset();
     game.heroCombat.reset();
     game.player.clearCombat();
     const roster = new RemoteRoster(game.scene, game.world);
@@ -229,6 +230,7 @@ export class Online {
     this.link = null;
     game.link.target = game.link.local;
     game.combatView.reset();
+    game.enemyRender.reset();
     game.heroCombat.reset();
     game.player.clearCombat();
     this.roster?.dispose();
