@@ -59,7 +59,8 @@ const MAX_SPOTS = 16;
 const MIN_SPOTS = 8;
 /** Sidewalk centre line inset (same as pedestrians). */
 export const PATROL_INSET = 3.8;
-const SIDEWALK = 5;
+/** Manhattan's sidewalk width (layouts may carry their own). */
+const SIDEWALK_GRID = 5;
 
 /** Capsule clearance for an enemy standing at (x, y, z): same margin as the player's safe spots. */
 export function spotFree(w: CollisionWorld, x: number, y: number, z: number, r = SPOT_RADIUS, h = SPOT_HEIGHT): boolean {
@@ -72,7 +73,7 @@ export function spotFree(w: CollisionWorld, x: number, y: number, z: number, r =
  * `y` (so a street arena never spawns on a car roof, a roof arena never on
  * an HVAC unit).
  */
-function collectSpots(w: CollisionWorld, cand: number[], cx: number, cz: number, y: number, tol: number): Float32Array {
+function collectSpots(w: CollisionWorld, cand: number[], cx: number, cz: number, y: number | ((x: number, z: number) => number), tol: number): Float32Array {
   const order: number[] = [];
   for (let i = 0; i < cand.length; i += 2) order.push(i);
   order.sort((a, b) => Math.hypot(cand[a]! - cx, cand[a + 1]! - cz) - Math.hypot(cand[b]! - cx, cand[b + 1]! - cz) || a - b);
@@ -81,8 +82,10 @@ function collectSpots(w: CollisionWorld, cand: number[], cx: number, cz: number,
     if (out.length >= MAX_SPOTS * 3) break;
     const x = cand[i]!,
       z = cand[i + 1]!;
-    const s = w.supportHeight(x, z, y + 1, 0);
-    if (s.y === -Infinity || Math.abs(s.y - y) > tol) continue;
+    // The surface the spot must stand on (a function of x, z on maps with hills).
+    const want = typeof y === 'number' ? y : y(x, z);
+    const s = w.supportHeight(x, z, want + 1, 0);
+    if (s.y === -Infinity || Math.abs(s.y - want) > tol) continue;
     if (!spotFree(w, x, s.y, z)) continue;
     out.push(x, s.y, z);
   }
@@ -103,6 +106,11 @@ export function buildSpawnPoints(layout: CityLayout, w: CollisionWorld): SpawnPo
   const byType: number[][] = [];
   for (let i = 0; i < AR_COUNT; i++) byType.push([]);
   const terr = w.terrain;
+  const SIDEWALK = layout.sidewalk ?? SIDEWALK_GRID;
+  // Ground level: the curb (sidewalks, plazas, parks) is a constant on the flat grid, the terrain elsewhere.
+  const ground = (x: number, z: number): number => terr.height(x, z);
+  const curbY = (x: number, z: number): number => (terr.flat ? CURB : terr.height(x, z));
+  const curbAt: number | ((x: number, z: number) => number) = terr.flat ? CURB : ground;
   const add = (type: number, x: number, y: number, z: number, rect: Rect, spots: Float32Array, roof: boolean, buildingId: number, district: number): void => {
     if (spots.length < MIN_SPOTS * 3) return;
     const id = arenas.length;
@@ -149,7 +157,7 @@ export function buildSpawnPoints(layout: CityLayout, w: CollisionWorld): SpawnPo
           else cand.push(rect.minX + a, blk.minZ + inset);
         }
       }
-      add(AR.STOREFRONT, cx, CURB, cz, rect, collectSpots(w, cand, cx, cz, CURB, 0.05), false, best, blk.district);
+      add(AR.STOREFRONT, cx, curbY(cx, cz), cz, rect, collectSpots(w, cand, cx, cz, curbAt, 0.05), false, best, blk.district);
     }
   }
 
@@ -158,7 +166,7 @@ export function buildSpawnPoints(layout: CityLayout, w: CollisionWorld): SpawnPo
     for (const st of layout.streets) {
       const x = av.center,
         z = st.center;
-      if (!terr.onLand(x, z) || terr.isWater(x, z) || terr.inPark(x, z)) continue;
+      if (terr.isWater(x, z) || terr.inPark(x, z)) continue;
       const hx = av.width / 2,
         hz = st.width / 2;
       const rect = { minX: x - hx - SIDEWALK, maxX: x + hx + SIDEWALK, minZ: z - hz - SIDEWALK, maxZ: z + hz + SIDEWALK };
@@ -177,7 +185,7 @@ export function buildSpawnPoints(layout: CityLayout, w: CollisionWorld): SpawnPo
         z1 = s1.center - s1.width / 2;
       const x = av.center,
         z = (z0 + z1) / 2;
-      if (z1 - z0 < 40 || !terr.onLand(x, z) || terr.inPark(x, z) || !terr.isRoad(x, z)) continue;
+      if (z1 - z0 < 40 || terr.isWater(x, z) || terr.inPark(x, z) || !terr.isRoad(x, z)) continue;
       const hx = av.width / 2;
       const rect = { minX: x - hx, maxX: x + hx, minZ: z0, maxZ: z1 };
       const cand = grid(x - hx + 2, x + hx - 2, z0 + 3, z1 - 3, 3.5);
@@ -185,12 +193,15 @@ export function buildSpawnPoints(layout: CityLayout, w: CollisionWorld): SpawnPo
     }
   }
 
+  // Maps described by road pieces (no avenue x street grid): crossings, long straight runs and quays.
+  if (layout.roads) roadArenas(layout, w, ground, add);
+
   // Plazas inside blocks.
   for (const p of layout.plazas) {
     const cx = (p.minX + p.maxX) / 2,
       cz = (p.minZ + p.maxZ) / 2;
     const cand = grid(p.minX + 1.5, p.maxX - 1.5, p.minZ + 1.5, p.maxZ - 1.5, 2.5);
-    add(AR.PLAZA, cx, CURB, cz, { ...p }, collectSpots(w, cand, cx, cz, CURB, 0.05), false, -1, 0);
+    add(AR.PLAZA, cx, curbY(cx, cz), cz, { ...p }, collectSpots(w, cand, cx, cz, curbAt, 0.05), false, -1, 0);
   }
 
   // Roofs: the top volume of each building with at least 400 m2 of roof.
@@ -209,9 +220,8 @@ export function buildSpawnPoints(layout: CityLayout, w: CollisionWorld): SpawnPo
   }
 
   // Park: open lawns on a 40 m grid, clear of the pond.
-  {
-    const pk = layout.park,
-      pd = layout.pond;
+  for (const pk of layout.parks ?? [layout.park]) {
+    const pd = layout.pond;
     const centres = grid(pk.minX + 20, pk.maxX - 20, pk.minZ + 20, pk.maxZ - 20, 40);
     for (let i = 0; i < centres.length; i += 2) {
       const x = centres[i]!,
@@ -221,9 +231,9 @@ export function buildSpawnPoints(layout: CityLayout, w: CollisionWorld): SpawnPo
       if (dx * dx + dz * dz < 1) continue;
       const rect = { minX: x - 12, maxX: x + 12, minZ: z - 12, maxZ: z + 12 };
       const cand = grid(x - 9, x + 9, z - 9, z + 9, 3);
-      const spots = collectSpots(w, cand, x, z, CURB, 0.05);
+      const spots = collectSpots(w, cand, x, z, curbAt, 0.05);
       if (spots.length < MAX_SPOTS * 3) continue;
-      add(AR.PARK, x, CURB, z, rect, spots, false, -1, 0);
+      add(AR.PARK, x, curbY(x, z), z, rect, spots, false, -1, 0);
     }
   }
 
@@ -237,12 +247,14 @@ export function buildSpawnPoints(layout: CityLayout, w: CollisionWorld): SpawnPo
 
   // Patrol loops: sidewalk rectangles inset like the pedestrians', kept only when every 4 m sample is clear.
   const loops: PatrolLoop[] = [];
+  // Narrower sidewalks (Istanbul) walk their middle.
+  const inset = SIDEWALK === SIDEWALK_GRID ? PATROL_INSET : SIDEWALK / 2;
   for (const b of layout.blocks) {
-    const x0 = b.minX + PATROL_INSET,
-      x1 = b.maxX - PATROL_INSET,
-      z0 = b.minZ + PATROL_INSET,
-      z1 = b.maxZ - PATROL_INSET;
-    if (x1 - x0 < PATROL_INSET * 2 || z1 - z0 < PATROL_INSET * 2) continue;
+    const x0 = b.minX + inset,
+      x1 = b.maxX - inset,
+      z0 = b.minZ + inset,
+      z1 = b.maxZ - inset;
+    if (x1 - x0 < inset * 2 || z1 - z0 < inset * 2) continue;
     const corners = [x0, z0, x1, z0, x1, z1, x0, z1, x0, z0];
     let ok = true;
     for (let k = 0; k < 4 && ok; k++) {
@@ -255,18 +267,112 @@ export function buildSpawnPoints(layout: CityLayout, w: CollisionWorld): SpawnPo
       for (let i = 0; i < n && ok; i++) {
         const x = ax + ((bx - ax) * i) / n,
           z = az + ((bz - az) * i) / n;
-        const s = w.supportHeight(x, z, CURB + 1, 0);
-        if (Math.abs(s.y - CURB) > 0.05 || !w.capsuleFree(x, s.y + 0.02, z, 0.45, 1.8)) ok = false;
+        const want = curbY(x, z);
+        const s = w.supportHeight(x, z, want + 1, 0);
+        if (Math.abs(s.y - want) > 0.05 || !w.capsuleFree(x, s.y + 0.02, z, 0.45, 1.8)) ok = false;
       }
     }
     if (!ok) continue;
     const pts = new Float32Array(corners);
     const cum = new Float32Array(5);
     for (let k = 1; k < 5; k++) cum[k] = cum[k - 1]! + Math.hypot(pts[k * 2]! - pts[k * 2 - 2]!, pts[k * 2 + 1]! - pts[k * 2 - 1]!);
-    loops.push({ pts, cum, total: cum[4]!, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, y: CURB });
+    loops.push({ pts, cum, total: cum[4]!, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, y: curbY((x0 + x1) / 2, (z0 + z1) / 2) });
   }
 
   return { arenas, loops, byType };
+}
+
+type AddArena = (type: number, x: number, y: number, z: number, rect: Rect, spots: Float32Array, roof: boolean, buildingId: number, district: number) => void;
+
+/**
+ * Arenas from road pieces: intersections where two axis-aligned roads with
+ * cars cross, straight runs of at least 40 m (avenue type, for the charging
+ * boss) and quays on the sea side of the coastal roads (pier type). Spots
+ * stand on the terrain (road level, or the curb on raised ground).
+ */
+function roadArenas(layout: CityLayout, w: CollisionWorld, ground: (x: number, z: number) => number, add: AddArena): void {
+  const terr = w.terrain;
+  const segs: Array<[number, number, number, number, number]> = [];
+  for (const r of layout.roads ?? []) {
+    if (!r.cars) continue;
+    for (let i = 0; i + 1 < r.pts.length; i++) {
+      const a = r.pts[i]!,
+        b = r.pts[i + 1]!;
+      segs.push([a[0], a[1], b[0], b[1], r.width]);
+    }
+  }
+  const axisX = (s: [number, number, number, number, number]): boolean => Math.abs(s[3] - s[1]) < 0.01;
+  const axisZ = (s: [number, number, number, number, number]): boolean => Math.abs(s[2] - s[0]) < 0.01;
+  // Intersections.
+  const found: Array<[number, number]> = [];
+  for (const h of segs) {
+    if (!axisX(h)) continue;
+    const z = h[1],
+      hx0 = Math.min(h[0], h[2]),
+      hx1 = Math.max(h[0], h[2]);
+    for (const v of segs) {
+      if (!axisZ(v)) continue;
+      const x = v[0],
+        vz0 = Math.min(v[1], v[3]),
+        vz1 = Math.max(v[1], v[3]);
+      // Crossings and T-junctions (a street ends at the other's curb, half its width from the centre line).
+      if (x < hx0 - v[4] / 2 - 1 || x > hx1 + v[4] / 2 + 1 || z < vz0 - h[4] / 2 - 1 || z > vz1 + h[4] / 2 + 1) continue;
+      if (found.some((f) => Math.abs(f[0] - x) < 20 && Math.abs(f[1] - z) < 20)) continue;
+      if (terr.isWater(x, z)) continue;
+      found.push([x, z]);
+      const hx = v[4] / 2,
+        hz = h[4] / 2;
+      const rect = { minX: x - hx - 3, maxX: x + hx + 3, minZ: z - hz - 3, maxZ: z + hz + 3 };
+      const cand = grid(x - hx + 1.5, x + hx - 1.5, z - hz + 1.5, z + hz - 1.5, 3);
+      add(AR.INTERSECTION, x, ground(x, z), z, rect, collectSpots(w, cand, x, z, ground, 0.05), false, -1, 0);
+    }
+  }
+  // Straight runs (between 40 and 120 m of one axis-aligned piece).
+  for (const s of segs) {
+    const len = Math.hypot(s[2] - s[0], s[3] - s[1]);
+    if (len < 40 || (!axisX(s) && !axisZ(s))) continue;
+    const cx = (s[0] + s[2]) / 2,
+      cz = (s[1] + s[3]) / 2;
+    if (terr.isWater(cx, cz)) continue;
+    const half = Math.min(len, 120) / 2 - 6,
+      hw = s[4] / 2;
+    const rect = axisX(s) ? { minX: cx - half, maxX: cx + half, minZ: cz - hw, maxZ: cz + hw } : { minX: cx - hw, maxX: cx + hw, minZ: cz - half, maxZ: cz + half };
+    const cand = grid(rect.minX + 2, rect.maxX - 2, rect.minZ + 2, rect.maxZ - 2, 3.5);
+    add(AR.AVENUE, cx, ground(cx, cz), cz, rect, collectSpots(w, cand, cx, cz, ground, 0.05), false, -1, 0);
+  }
+  // Quays: every 140 m along the coastal roads, on the water side.
+  for (const r of layout.roads ?? []) {
+    if (r.cls !== 3) continue;
+    let carry = 70;
+    for (let i = 0; i + 1 < r.pts.length; i++) {
+      const [ax, az] = r.pts[i]!;
+      const [bx, bz] = r.pts[i + 1]!;
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 1e-6) continue;
+      const ux = (bx - ax) / len,
+        uz = (bz - az) / len;
+      let t = carry;
+      while (t < len) {
+        const px = ax + ux * t,
+          pz = az + uz * t;
+        for (const side of [1, -1]) {
+          const nx = -uz * side,
+            nz = ux * side;
+          const qx = px + nx * (r.width / 2 + 7),
+            qz = pz + nz * (r.width / 2 + 7);
+          // The water side: water a little further out.
+          if (terr.isWater(qx, qz) || !terr.isWater(qx + nx * 14, qz + nz * 14)) continue;
+          const rect = { minX: qx - 9, maxX: qx + 9, minZ: qz - 9, maxZ: qz + 9 };
+          const all = grid(qx - 7.5, qx + 7.5, qz - 7.5, qz + 7.5, 3);
+          const cand: number[] = [];
+          for (let k = 0; k < all.length; k += 2) if (!terr.isWater(all[k]!, all[k + 1]!) && !terr.isRoad(all[k]!, all[k + 1]!)) cand.push(all[k]!, all[k + 1]!);
+          add(AR.PIER, qx, ground(qx, qz), qz, rect, collectSpots(w, cand, qx, qz, ground, 0.05), false, -1, 0);
+        }
+        t += 140;
+      }
+      carry = t - len;
+    }
+  }
 }
 
 /** Arena types a crime event may use (`boss` = boss kind for boss events). */

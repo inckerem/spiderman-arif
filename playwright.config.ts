@@ -3,9 +3,14 @@ import { defineConfig } from '@playwright/test';
 // SKYTHREAD_DEV_PORT overrides the dev server port (default 5173) so several checkouts can run at once.
 const PORT = Number(process.env.SKYTHREAD_DEV_PORT) || 5173;
 
-// Tests drive the dev build through window.__game. Software GL in a sandbox is
-// not representative of real GPU frame rates, so the suite measures simulation
-// time, draw calls, triangles and memory instead of FPS.
+// Use macOS's native ANGLE backend; forcing SwiftShader there causes GPU-stall
+// warnings during readback. Other platforms keep the software-rendered CI path.
+const GL_ARGS = process.platform === 'darwin'
+  ? ['--use-gl=angle', '--use-angle=metal']
+  : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
+
+// Tests drive the dev build through window.__game and measure simulation time,
+// draw calls, triangles and memory rather than hardware-dependent FPS.
 export default defineConfig({
   testDir: './tests',
   timeout: 30 * 60 * 1000,
@@ -19,9 +24,7 @@ export default defineConfig({
     viewport: { width: 1280, height: 720 },
     launchOptions: {
       args: [
-        '--use-gl=angle',
-        '--use-angle=swiftshader',
-        '--enable-unsafe-swiftshader',
+        ...GL_ARGS,
         '--ignore-gpu-blocklist',
         '--autoplay-policy=no-user-gesture-required',
         '--enable-precise-memory-info',

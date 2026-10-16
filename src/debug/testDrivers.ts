@@ -5,6 +5,7 @@ import type { Game } from '../game';
 import type { App } from '../app';
 import { BOX, CYL, F_ANCHOR, F_CAMERA, makeRayHit } from '../physics/collision';
 import { SHOT_NAMES } from '../camera/director';
+import { getMap } from '../maps/registry';
 import { MODE_GROUND, MODE_SWING, MODE_NAMES, MODE_WALL, MODE_ZIP } from '../player/player';
 import { makeAnchorResult } from '../player/targeting';
 import { SwingBrain, aimAt, aimForClick, emptyBotInput, fillTickInput, planTarget, routeTarget, type BotInput } from '../player/autopilot';
@@ -130,15 +131,14 @@ export interface FuzzReport {
 
 export function randomSpot(game: Game, rng: Rng, kind: number): Vector3 {
   const L = game.layout;
+  const map = getMap(L.mapId);
   const pl = game.player;
   const out = new Vector3();
   for (let tries = 0; tries < 60; tries++) {
     let x: number, z: number, y: number;
     if (kind === 0) {
-      // Street level anywhere on the island.
-      x = rng.range(L.land.minX + 10, L.land.maxX - 10);
-      z = rng.range(L.land.minZ + 10, L.land.maxZ - 10);
-      y = 0.5;
+      // Street level anywhere on land.
+      [x, y, z] = map.testSpots.street(rng, L, game.world.terrain);
     } else if (kind === 1) {
       const b = L.buildings[rng.int(0, L.buildings.length - 1)]!;
       const top = b.volumes[b.volumes.length - 1]!;
@@ -146,9 +146,7 @@ export function randomSpot(game: Game, rng: Rng, kind: number): Vector3 {
       z = rng.range(top.minZ + 1, top.maxZ - 1);
       y = top.maxY + 1;
     } else {
-      x = rng.range(L.park.minX + 5, L.park.maxX - 5);
-      z = rng.range(L.park.minZ + 5, L.park.maxZ - 5);
-      y = 0.5;
+      [x, y, z] = map.testSpots.park(rng, L);
     }
     if (pl.findSafeSpot(x, y, z, out)) return out;
   }
@@ -578,33 +576,11 @@ export function traversalBot(
 }
 
 export function cityRoute(game: Game): Array<[number, number]> {
-  const L = game.layout;
-  // South-west corner to north-east corner along avenues and streets.
-  const westAve = L.avenues[1]!.center;
-  const northSt = L.streets[1]!.center;
-  const southSt = L.streets[L.streets.length - 2]!.center;
-  const eastAve = L.avenues[L.avenues.length - 2]!.center;
-  return [
-    [westAve, southSt + 5],
-    [westAve, northSt],
-    [eastAve, northSt],
-  ];
+  return getMap(game.layout.mapId).routes.city(game.layout);
 }
 
 export function parkRoute(game: Game): Array<[number, number]> {
-  const L = game.layout;
-  const P = L.park;
-  const pond = L.pond;
-  // South edge to north edge, skirting the pond on its wider side.
-  const westRoom = pond.cx - pond.rx - P.minX;
-  const eastRoom = P.maxX - (pond.cx + pond.rx);
-  const sideX = westRoom > eastRoom ? (P.minX + pond.cx - pond.rx) / 2 : (P.maxX + pond.cx + pond.rx) / 2;
-  return [
-    [(P.minX + P.maxX) / 2, P.maxZ - 12],
-    [sideX, pond.cz + pond.rz + 20],
-    [sideX, pond.cz - pond.rz - 20],
-    [(P.minX + P.maxX) / 2, P.minZ + 12],
-  ];
+  return getMap(game.layout.mapId).routes.park(game.layout);
 }
 
 // -----------------------------------------------------------------------------
@@ -1441,8 +1417,14 @@ export function lifeTest(game: Game): Record<string, unknown> {
   const L = game.layout;
   const traffic = game.traffic;
   const peds = game.peds;
-  const onRoad = (x: number, z: number): boolean =>
-    L.avenues.some((a) => Math.abs(x - a.center) <= a.width / 2 + 0.5) || L.streets.some((s) => Math.abs(z - s.center) <= s.width / 2 + 0.5);
+  const terr = game.world.terrain;
+  // On the carriageway, with half a metre (a metre where the road pieces meet at an angle) of slack.
+  const slack = L.roads ? 1 : 0.5;
+  const onRoad = L.roads
+    ? (x: number, z: number): boolean =>
+        terr.isRoad(x, z) || terr.isRoad(x + slack, z) || terr.isRoad(x - slack, z) || terr.isRoad(x, z + slack) || terr.isRoad(x, z - slack)
+    : (x: number, z: number): boolean =>
+        L.avenues.some((a) => Math.abs(x - a.center) <= a.width / 2 + 0.5) || L.streets.some((s) => Math.abs(z - s.center) <= s.width / 2 + 0.5);
   const counts: Record<string, number> = {};
   for (let q = 0; q < 4; q++) {
     game.applyQuality(q);
@@ -1482,10 +1464,19 @@ export function lifeTest(game: Game): Record<string, unknown> {
     peds.mesh.getMatrixAt(i, m);
     v.setFromMatrixPosition(m);
     const inPark = v.x > L.park.minX && v.x < L.park.maxX && v.z > L.park.minZ && v.z < L.park.maxZ;
-    if (!inPark && v.y < 0.1) pedOnRoad++;
+    // At the road level (not on a curb-high sidewalk) outside the park.
+    if (!inPark && v.y < terr.baseHeight(v.x, v.z) + 0.1) pedOnRoad++;
+  }
+  // Cars follow the road level on slopes (Istanbul): the instance height against the terrain.
+  let carYErr = 0;
+  for (let i = 0; i < traffic.count; i++) {
+    traffic.mesh.getMatrixAt(i, m);
+    v.setFromMatrixPosition(m);
+    carYErr = Math.max(carYErr, Math.abs(v.y - terr.baseHeight(v.x, v.z)));
   }
   return {
     ...counts,
+    carYErr,
     nodes: traffic.nodeCount,
     links: traffic.linkCount,
     loops: peds.loopCount,

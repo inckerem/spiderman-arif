@@ -1,6 +1,6 @@
-import { Rng } from '../core/rng';
-import { clamp, lerp } from '../core/math';
-import { CURB } from '../physics/terrain';
+import { Rng } from '../../core/rng';
+import { clamp, lerp } from '../../core/math';
+import { CURB } from '../../physics/terrain';
 import {
   D_DOWNTOWN,
   D_LOW,
@@ -23,6 +23,9 @@ import {
   SP_TRAFFIC_LIGHT,
   SP_TRASH,
   TREE_MAPLE,
+  TREE_PLANE,
+  TREE_CYPRESS,
+  TREE_STONEPINE,
   TREE_OAK,
   TREE_PINE,
   TREE_POPLAR,
@@ -41,7 +44,7 @@ import {
   type StreetProp,
   type Tree,
   type Volume,
-} from './types';
+} from '../../world/types';
 
 const LAND: Rect = { minX: -720, maxX: 720, minZ: -760, maxZ: 760 };
 const ISLET: Rect = { minX: 975, maxX: 1085, minZ: -150, maxZ: 150 };
@@ -532,7 +535,7 @@ function distToPolyline(x: number, z: number, pts: Array<[number, number]>): num
   return best;
 }
 
-function makeTree(rng: Rng, species: number, x: number, z: number, y: number, height: number, park: boolean): Tree {
+export function makeTree(rng: Rng, species: number, x: number, z: number, y: number, height: number, park: boolean): Tree {
   let rx: number, ry: number, cyF: number, trunkTopF: number;
   switch (species) {
     case TREE_PINE:
@@ -552,6 +555,25 @@ function makeTree(rng: Rng, species: number, x: number, z: number, y: number, he
       ry = 0.27 * height;
       cyF = 0.62;
       trunkTopF = 0.5;
+      break;
+    // Istanbul species (M13): the plane's broad layered crown, the columnar cypress, the stone pine's high umbrella.
+    case TREE_PLANE:
+      rx = 0.33 * height;
+      ry = 0.27 * height;
+      cyF = 0.64;
+      trunkTopF = 0.5;
+      break;
+    case TREE_CYPRESS:
+      rx = 0.09 * height;
+      ry = 0.44 * height;
+      cyF = 0.54;
+      trunkTopF = 0.3;
+      break;
+    case TREE_STONEPINE:
+      rx = 0.34 * height;
+      ry = 0.13 * height;
+      cyF = 0.84;
+      trunkTopF = 0.76;
       break;
     default:
       rx = 0.31 * height;
@@ -1160,6 +1182,7 @@ export function generateCity(seed: number): CityLayout {
 
   const parkTrees = ctx.trees.filter((t) => t.park).length;
   return {
+    mapId: 'manhattan',
     seed,
     land: { ...LAND },
     islet: { ...ISLET },

@@ -1,9 +1,17 @@
 import { GeomBuilder } from '../../render/geomBuilder';
 import { Rng } from '../../core/rng';
-import { CURB } from '../../physics/terrain';
 import {
   D_DOWNTOWN,
   D_WATERFRONT,
+  HIP_EAVE,
+  HIP_LIFT,
+  HIP_PITCH,
+  LOOK_APARTMENT,
+  LOOK_GLASS,
+  LOOK_STONE,
+  LOOK_WOODEN,
+  PROP_ROOF_TANK,
+  PROP_SOLAR,
   PROP_ANTENNA,
   PROP_BILLBOARD,
   PROP_BLADE_SIGN,
@@ -12,8 +20,9 @@ import {
   PROP_TANK,
   PROP_WALL_SIGN,
   type Building,
+  type Volume,
 } from '../types';
-import { BILLBOARD_POST, TANK_LEG_R } from '../cityCollision';
+import { BILLBOARD_POST, SOLAR_STEP_TOPS, TANK_LEG_R } from '../cityCollision';
 import { HELIPAD_RECT } from '../../render/textures';
 
 export const FACADE_ATTRS = [
@@ -139,13 +148,35 @@ export function addBuildingGeometry(bld: Building, cb: ChunkBuilders, signRect: 
   const roofCol: RGB = bld.district === D_DOWNTOWN ? [0.5, 0.52, 0.55] : rng.chance(0.5) ? [0.34, 0.34, 0.37] : [0.42, 0.4, 0.38];
   const trim = st.trim as RGB;
   const wall = st.wall as RGB;
+  // Stone plinth on a slope: plain sides, no windows (its top is under the building).
+  if (bld.plinth) {
+    const p = bld.plinth;
+    noWindows(f);
+    if (st.look) {
+      // Istanbul: rough grey-ochre stone with a dressed cap course.
+      const k = 0.92 + 0.08 * rng.float();
+      f.setColor(0.66 * k, 0.6 * k, 0.5 * k);
+      f.box(p.minX, p.minY, p.minZ, p.maxX, p.maxY - 0.3, p.maxZ, 1 | 2 | 16 | 32);
+      f.setColor(0.8, 0.76, 0.68);
+      f.box(p.minX - 0.08, p.maxY - 0.3, p.minZ - 0.08, p.maxX + 0.08, p.maxY, p.maxZ + 0.08, 1 | 2 | 16 | 32);
+    } else {
+      f.setColor(0.72, 0.68, 0.6);
+      f.box(p.minX, p.minY, p.minZ, p.maxX, p.maxY, p.maxZ, 1 | 2 | 16 | 32);
+    }
+  } else if (st.look) {
+    // A skirt below the floor line: the ground under a building is not drawn (terrainGeo).
+    const v = vols[0]!;
+    noWindows(f);
+    f.setColor(0.6, 0.56, 0.5);
+    f.box(v.minX, v.minY - 0.4, v.minZ, v.maxX, v.minY, v.maxZ, 1 | 2 | 16 | 32);
+  }
   for (let i = 0; i < vols.length; i++) {
     const v = vols[i]!;
     const above = vols[i + 1];
-    const isGround = v.minY <= CURB + 0.01;
+    const isGround = v.minY <= bld.volumes[0]!.minY + 0.01;
     const storefront = isGround ? st.storefront : 0;
     const crown = v.role === 2;
-    const style = crown && bld.district === D_DOWNTOWN ? 6 : st.window;
+    const style = crown && bld.district === D_DOWNTOWN ? (st.look === LOOK_GLASS ? 0 : 6) : st.window;
     const wallC: RGB = crown ? mulRGB(wall, 0.92) : v.role === 0 && bld.district === D_DOWNTOWN ? mulRGB(trim, 0.9) : wall;
     f.setColorArr(wallC);
     const seed = (bld.seed % 997) / 997 + i * 0.137;
@@ -159,32 +190,37 @@ export function addBuildingGeometry(bld: Building, cb: ChunkBuilders, signRect: 
       Math.abs(above.maxX - v.maxX) < 0.3 &&
       Math.abs(above.minZ - v.minZ) < 0.3 &&
       Math.abs(above.maxZ - v.maxZ) < 0.3;
-    if (!covered) {
+    const hipped = bld.hipRoof !== undefined && !above;
+    if (!covered && !hipped) {
       noWindows(f);
-      f.setColorArr(roofCol);
+      f.setColorArr(st.look ? mulRGB(trim, 0.62) : roofCol);
       f.box(v.minX, v.minY, v.minZ, v.maxX, v.maxY, v.maxZ, 4);
     }
-    // Cornice band at the top of the volume. Its top is only the outset ring:
-    // the roof (or the volume above) covers the footprint at the same height,
-    // and two faces there would z-fight into stripes. The ring is four
-    // trapezoids (mitred at the corners) whose outer edges are the full top
-    // edges of the side faces and whose inner edges are the roof's edges, so
-    // every shared edge has the same two vertices on both sides (no
-    // T-junctions, which crack into pinholes).
-    noWindows(f);
-    f.setColorArr(trim);
-    const o = CORNICE_OUT;
-    const cy = v.maxY - CORNICE_H;
-    f.box(v.minX - o, cy, v.minZ - o, v.maxX + o, v.maxY, v.maxZ + o, 1 | 2 | 8 | 16 | 32);
-    const x0 = v.minX,
-      x1 = v.maxX,
-      z0 = v.minZ,
-      z1 = v.maxZ,
-      y = v.maxY;
-    f.quad(x0, y, z0, x1, y, z0, x1 + o, y, z0 - o, x0 - o, y, z0 - o, 0, 1, 0);
-    f.quad(x0 - o, y, z1 + o, x1 + o, y, z1 + o, x1, y, z1, x0, y, z1, 0, 1, 0);
-    f.quad(x0 - o, y, z1 + o, x0, y, z1, x0, y, z0, x0 - o, y, z0 - o, 0, 1, 0);
-    f.quad(x1, y, z1, x1 + o, y, z1 + o, x1 + o, y, z0 - o, x1, y, z0, 0, 1, 0);
+    if (st.look) districtTrim(f, bld, v, storefront, hipped);
+    // Wooden houses under a hip roof show the eave, not a cornice.
+    if (!(hipped && st.look === LOOK_WOODEN)) {
+      // Cornice band at the top of the volume. Its top is only the outset ring:
+      // the roof (or the volume above) covers the footprint at the same height,
+      // and two faces there would z-fight into stripes. The ring is four
+      // trapezoids (mitred at the corners) whose outer edges are the full top
+      // edges of the side faces and whose inner edges are the roof's edges, so
+      // every shared edge has the same two vertices on both sides (no
+      // T-junctions, which crack into pinholes).
+      noWindows(f);
+      f.setColorArr(trim);
+      const o = CORNICE_OUT;
+      const cy = v.maxY - CORNICE_H;
+      f.box(v.minX - o, cy, v.minZ - o, v.maxX + o, v.maxY, v.maxZ + o, 1 | 2 | 8 | 16 | 32);
+      const x0 = v.minX,
+        x1 = v.maxX,
+        z0 = v.minZ,
+        z1 = v.maxZ,
+        y = v.maxY;
+      f.quad(x0, y, z0, x1, y, z0, x1 + o, y, z0 - o, x0 - o, y, z0 - o, 0, 1, 0);
+      f.quad(x0 - o, y, z1 + o, x1 + o, y, z1 + o, x1, y, z1, x0, y, z1, 0, 1, 0);
+      f.quad(x0 - o, y, z1 + o, x0, y, z1, x0, y, z0, x0 - o, y, z0 - o, 0, 1, 0);
+      f.quad(x1, y, z1, x1 + o, y, z1 + o, x1 + o, y, z0 - o, x1, y, z0, 0, 1, 0);
+    }
     // Pilasters at the corners (and along long faces when the style uses them).
     if (st.pilasters && v.maxY - v.minY > 6) {
       f.setColorArr(mulRGB(trim, 0.95));
@@ -229,6 +265,28 @@ export function addBuildingGeometry(bld: Building, cb: ChunkBuilders, signRect: 
       f.setColorArr(mulRGB(trim, 0.85));
       const y = v.minY + storefront;
       f.box(v.minX - 0.2, y - 0.25, v.minZ - 0.2, v.maxX + 0.2, y + 0.05, v.maxZ + 0.2, 63 & ~4);
+    }
+  }
+  if (bld.hipRoof) hipRoof(f, vols[vols.length - 1]!, bld.hipRoof.color, trim);
+  if (bld.bays) {
+    for (const by of bld.bays) {
+      f.setColorArr(st.look === LOOK_WOODEN ? mulRGB(wall, 0.94) : wall);
+      const seed = (bld.seed % 991) / 991;
+      // Window faces on the three outward sides (the side against the wall is hidden).
+      for (const face of [1, 2, 16, 32]) {
+        const fp = bld.footprint;
+        const against = face === 1 ? Math.abs(by.maxX - fp.minX) : face === 2 ? Math.abs(by.minX - fp.maxX) : face === 16 ? Math.abs(by.maxZ - fp.minZ) : Math.abs(by.minZ - fp.maxZ);
+        if (against < 0.01) continue;
+        facadeFace(f, face, by.minX, by.minY, by.minZ, by.maxX, by.maxY, by.maxZ, st.window, st.floorHeight, Math.min(st.bayWidth, 1.5), seed, vols[0]!.minY, st.storefront, st.litRatio, st.glass as RGB);
+      }
+      noWindows(f);
+      f.setColorArr(mulRGB(trim, 0.9));
+      f.box(by.minX, by.minY, by.minZ, by.maxX, by.maxY, by.maxZ, 4 | 8);
+      // Corbel line under the bay and a cap on top.
+      f.setColorArr(mulRGB(trim, 0.8));
+      f.box(by.minX - 0.05, by.minY - 0.2, by.minZ - 0.05, by.maxX + 0.05, by.minY, by.maxZ + 0.05, 63 & ~4);
+      f.setColorArr(trim);
+      f.box(by.minX - 0.1, by.maxY, by.minZ - 0.1, by.maxX + 0.1, by.maxY + 0.18, by.maxZ + 0.1, 63 & ~8);
     }
   }
   // Parapets
@@ -341,6 +399,43 @@ export function addBuildingGeometry(bld: Building, cb: ChunkBuilders, signRect: 
         bladeQuads(cb.signs, cx, cz, pr.y + 0.15, pr.y + pr.sy - 0.15, alongX ? o / 2 - 0.08 : 0, alongX ? 0 : o / 2 - 0.08, alongX, rect);
         break;
       }
+      case PROP_SOLAR: {
+        // Collector facing south on a frame, a lying tank on top at the back (sizes as in the collider steps).
+        const hx = pr.sx / 2,
+          t = pr.sz / 6;
+        const zb = pr.z - 3 * t,
+          zf = pr.z + 3 * t;
+        const yBack = pr.y + pr.sy * SOLAR_STEP_TOPS[1]! + 0.12,
+          yFront = pr.y + pr.sy * SOLAR_STEP_TOPS[2]! - 0.3;
+        P.setColor(0.62, 0.64, 0.66);
+        for (const x of [pr.x - hx + 0.1, pr.x + hx - 0.1]) {
+          P.box(x - 0.04, pr.y, zf - 0.15, x + 0.04, yFront, zf - 0.07, 63 & ~8);
+          P.box(x - 0.04, pr.y, pr.z - t, x + 0.04, yBack, pr.z - t + 0.08, 63 & ~8);
+        }
+        P.setColor(0.13, 0.19, 0.3);
+        P.quad(pr.x - hx, yFront, zf, pr.x + hx, yFront, zf, pr.x + hx, yBack, pr.z - t, pr.x - hx, yBack, pr.z - t, 0, 0.95, 0.31);
+        P.setColor(0.7, 0.72, 0.74);
+        P.quad(pr.x + hx, yFront - 0.06, zf, pr.x - hx, yFront - 0.06, zf, pr.x - hx, yBack - 0.06, pr.z - t, pr.x + hx, yBack - 0.06, pr.z - t, 0, -0.95, -0.31);
+        // The tank lies along x: a cylinder turned onto its side.
+        const r = Math.min(0.42, (pr.sy - pr.sy * SOLAR_STEP_TOPS[1]!) / 2 + 0.05);
+        const start = P.vertexCount;
+        P.setColor(0.86, 0.87, 0.88);
+        P.cylinder(0, 0, -hx, hx, r, r, 10, true);
+        // Rotate -90 degrees about z (y onto x) and move onto the back of the frame.
+        P.transformRange(start, (vv, nn) => {
+          vv.set(pr.x + vv.y, pr.y + pr.sy - r - vv.x, (zb + pr.z - t) / 2 + vv.z);
+          nn.set(nn.y, -nn.x, nn.z);
+        });
+        break;
+      }
+      case PROP_ROOF_TANK: {
+        const r = pr.sx / 2;
+        const c = pr.variant === 0 ? [0.92, 0.92, 0.9] : pr.variant === 1 ? [0.35, 0.5, 0.7] : [0.85, 0.82, 0.62];
+        P.setColorArr(c);
+        P.cylinder(pr.x, pr.z, pr.y, pr.y + pr.sy - 0.15, r, r, 12, false);
+        P.cylinder(pr.x, pr.z, pr.y + pr.sy - 0.15, pr.y + pr.sy, r, r * 0.55, 12, true);
+        break;
+      }
       case PROP_WALL_SIGN: {
         P.setColor(0.16, 0.16, 0.18);
         const half = pr.sx / 2;
@@ -368,12 +463,118 @@ export function addBuildingGeometry(bld: Building, cb: ChunkBuilders, signRect: 
         const off = d + 0.01;
         const fx = pr.face === 0 ? pr.x + off : pr.face === 1 ? pr.x - off : pr.x;
         const fz = pr.face === 2 ? pr.z + off : pr.face === 3 ? pr.z - off : pr.z;
-        signQuad(cb.signs, fx, fz, pr.y + 0.08, pr.y + pr.sy - 0.08, half - 0.08, pr.face, 0, rect, false);
+        // Istanbul wall signs wind their face toward the street (front-facing); Manhattan's keep their original order.
+        signQuad(cb.signs, fx, fz, pr.y + 0.08, pr.y + pr.sy - 0.08, half - 0.08, pr.face, 0, rect, false, st.look !== undefined);
         break;
       }
     }
   }
   void D_WATERFRONT;
+}
+
+/**
+ * Istanbul district detail on a volume (M13): string courses on apartments
+ * and stone hans, a dentil band under the apartment cornice, a heavier
+ * rusticated ground floor on stone buildings. Each band protrudes at most
+ * 0.14 m (visuals stay within 0.3 m of the box collider).
+ */
+function districtTrim(f: GeomBuilder, bld: Building, v: Volume, storefront: number, hipped: boolean): void {
+  const st = bld.style;
+  const trim = st.trim as RGB;
+  const band = (y0: number, y1: number, o: number, c: RGB): void => {
+    f.setColorArr(c);
+    f.box(v.minX - o, y0, v.minZ - o, v.maxX + o, y1, v.maxZ + o, 1 | 2 | 16 | 32);
+  };
+  noWindows(f);
+  const ground = bld.volumes[0]!.minY;
+  const first = ground + (storefront > 0 ? storefront : st.floorHeight);
+  if (st.look === LOOK_APARTMENT || st.look === LOOK_STONE) {
+    // A string course at every floor line above the ground floor.
+    const c = mulRGB(trim, 0.93);
+    for (let y = first; y < v.maxY - 1.2; y += st.floorHeight) {
+      if (y <= v.minY + 0.3) continue;
+      band(y - 0.09, y + 0.09, 0.08, c);
+    }
+    if (st.look === LOOK_APARTMENT && v.maxY - v.minY > 6) band(v.maxY - 0.9, v.maxY - 0.62, 0.14, mulRGB(trim, 0.88));
+  }
+  if (st.look === LOOK_STONE && v.minY <= ground + 0.01) {
+    // Rusticated base: a darker plinth course and a heavy band over the ground floor.
+    band(ground, ground + 0.6, 0.06, mulRGB(st.wall as RGB, 0.78));
+    band(first - 0.25, first + 0.05, 0.12, mulRGB(trim, 0.85));
+  }
+  if (st.look === LOOK_WOODEN && !hipped && v.maxY - v.minY > 4) band(v.maxY - 1.0, v.maxY - 0.8, 0.06, mulRGB(trim, 0.9));
+}
+
+/**
+ * Hip roof of clay tiles over a volume: four planes rising at HIP_PITCH from
+ * HIP_LIFT above the wall top, a HIP_EAVE overhang with fascia and soffit,
+ * a ridge cap. Tiles are the window atlas slot 5 (Istanbul), one barrel
+ * tile per cell and one course per 0.115 m of height. The step colliders
+ * (gen) follow the same planes within 0.3 m.
+ */
+function hipRoof(f: GeomBuilder, v: Volume, color: RGB, trim: RGB): void {
+  const e = HIP_EAVE;
+  const yE = v.maxY + HIP_LIFT - HIP_PITCH * e;
+  const X0 = v.minX - e,
+    X1 = v.maxX + e,
+    Z0 = v.minZ - e,
+    Z1 = v.maxZ + e;
+  const W = X1 - X0,
+    D = Z1 - Z0;
+  const alongX = W >= D;
+  const half = (alongX ? D : W) / 2;
+  const yR = yE + HIP_PITCH * half;
+  const cx = (X0 + X1) / 2,
+    cz = (Z0 + Z1) / 2;
+  // Ridge ends.
+  const ra: [number, number] = alongX ? [X0 + half, cz] : [cx, Z0 + half];
+  const rb: [number, number] = alongX ? [X1 - half, cz] : [cx, Z1 - half];
+  f.setColorArr(color);
+  f.setExtra('aWin', 5, 0.115, 0.24, 0);
+  f.setExtra('aWin2', 0, 0, 0, 0);
+  f.setExtra('aGlass', 0.3, 0.3, 0.3);
+  const ny = 1 / Math.hypot(1, HIP_PITCH),
+    nh = HIP_PITCH * ny;
+  const vtx = (x: number, y: number, z: number, nx: number, nz: number, u: number): number => {
+    const i = f.vertex(x, y, z, nx, ny, nz);
+    f.patchExtra('aFac', i, u, y);
+    return i;
+  };
+  const poly = (pts: Array<[number, number, number]>, nx: number, nz: number, uAlongX: boolean): void => {
+    const ids = pts.map(([x, y, z]) => vtx(x, y, z, nx, nz, uAlongX ? x : z));
+    for (let k = 1; k + 1 < ids.length; k++) f.tri(ids[0]!, ids[k]!, ids[k + 1]!);
+  };
+  // South (+z), north (-z), east (+x), west (-x); counter-clockwise seen from outside.
+  const [ax, az] = ra,
+    [bx, bz] = rb;
+  if (alongX) {
+    poly([[X0, yE, Z1], [X1, yE, Z1], [bx, yR, bz], [ax, yR, az]], 0, nh, true);
+    poly([[X1, yE, Z0], [X0, yE, Z0], [ax, yR, az], [bx, yR, bz]], 0, -nh, true);
+    poly([[X1, yE, Z1], [X1, yE, Z0], [bx, yR, bz]], nh, 0, false);
+    poly([[X0, yE, Z0], [X0, yE, Z1], [ax, yR, az]], -nh, 0, false);
+  } else {
+    poly([[X0, yE, Z1], [X1, yE, Z1], [bx, yR, bz]], 0, nh, true);
+    poly([[X1, yE, Z0], [X0, yE, Z0], [ax, yR, az]], 0, -nh, true);
+    poly([[X1, yE, Z1], [X1, yE, Z0], [ax, yR, az], [bx, yR, bz]], nh, 0, false);
+    poly([[X0, yE, Z0], [X0, yE, Z1], [bx, yR, bz], [ax, yR, az]], -nh, 0, false);
+  }
+  noWindows(f);
+  // Fascia board round the eave and the soffit back to the wall top.
+  const yF = yE - 0.14;
+  f.setColorArr(mulRGB(trim, 0.85));
+  f.box(X0, yF, Z0, X1, yE, Z1, 1 | 2 | 16 | 32);
+  f.setColorArr(mulRGB(trim, 0.7));
+  f.quad(X0, yF, Z0, X1, yF, Z0, v.maxX, v.maxY, v.minZ, v.minX, v.maxY, v.minZ, 0, -1, 0);
+  f.quad(X1, yF, Z1, X0, yF, Z1, v.minX, v.maxY, v.maxZ, v.maxX, v.maxY, v.maxZ, 0, -1, 0);
+  f.quad(X0, yF, Z1, X0, yF, Z0, v.minX, v.maxY, v.minZ, v.minX, v.maxY, v.maxZ, 0, -1, 0);
+  f.quad(X1, yF, Z0, X1, yF, Z1, v.maxX, v.maxY, v.maxZ, v.maxX, v.maxY, v.minZ, 0, -1, 0);
+  // Ridge cap.
+  if (Math.hypot(bx - ax, bz - az) > 0.4) {
+    f.setColorArr(mulRGB(color, 0.8));
+    const h = 0.14;
+    if (alongX) f.box(ax - 0.1, yR - 0.06, cz - h, bx + 0.1, yR + 0.12, cz + h, 63 & ~8);
+    else f.box(cx - h, yR - 0.06, az - 0.1, cx + h, yR + 0.12, bz + 0.1, 63 & ~8);
+  }
 }
 
 /** Flat textured sign facing `face` (0 +X, 1 -X, 2 +Z, 3 -Z); `twoSided` adds the back. */
@@ -388,13 +589,15 @@ function signQuad(
   offset: number,
   rect: [number, number, number, number],
   twoSided: boolean,
+  frontFacing = false,
 ): void {
   const [u, v, w, h] = rect;
   S.setColor(1, 1, 1);
   const emit = (fx: number, fz: number, nx: number, nz: number): void => {
-    // Left/right as seen from the front.
-    const lx = nz !== 0 ? -nz : 0,
-      lz = nx !== 0 ? nx : 0;
+    // Left/right as seen from the front (`frontFacing`: the text starts at the viewer's left and the face winds toward the viewer).
+    const k = frontFacing ? -1 : 1;
+    const lx = (nz !== 0 ? -nz : 0) * k,
+      lz = (nx !== 0 ? nx : 0) * k;
     const ax = fx - lx * half,
       az = fz - lz * half;
     const bx = fx + lx * half,

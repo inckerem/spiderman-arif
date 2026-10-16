@@ -1,5 +1,7 @@
 /** Plain-data description of the generated city. Rendering and physics are built from it. */
 
+import type { MapId } from '../maps/ids';
+
 export interface Rect {
   minX: number;
   maxX: number;
@@ -63,7 +65,19 @@ export interface FacadeStyle {
   /** Chance a window is lit at night. */
   litRatio: number;
   pilasters: boolean;
+  /**
+   * District look (Istanbul, M13): 1 Ottoman wooden house (clapboard, wide
+   * eaves), 2 Beyoğlu apartment (ornate cornice, string courses), 3 stone
+   * han or warehouse (rusticated ground floor), 4 glass tower. Absent: the
+   * plain facade (Manhattan).
+   */
+  look?: number;
 }
+
+export const LOOK_WOODEN = 1;
+export const LOOK_APARTMENT = 2;
+export const LOOK_STONE = 3;
+export const LOOK_GLASS = 4;
 
 export const PROP_HVAC = 0;
 export const PROP_TANK = 1;
@@ -73,6 +87,10 @@ export const PROP_BILLBOARD = 4;
 export const PROP_BLADE_SIGN = 5;
 export const PROP_WALL_SIGN = 6;
 export const PROP_SPIRE_TOP = 7;
+/** Solar water heater (Istanbul terraces): a tilted collector with a lying tank behind it. */
+export const PROP_SOLAR = 8;
+/** Plastic roof water tank (Istanbul terraces): a white upright cylinder. */
+export const PROP_ROOF_TANK = 9;
 
 export interface RoofProp {
   type: number;
@@ -100,12 +118,37 @@ export interface Building {
   /** Footprint of the ground volume. */
   footprint: Rect;
   seed: number;
+  /** Stone plinth under a building on a slope (from below the low side up to the floor). */
+  plinth?: BoxSpec;
+  /**
+   * Hip roof of clay tiles over the top volume (Istanbul): four planes at
+   * `HIP_PITCH` rising from `HIP_LIFT` above the wall top, with a
+   * `HIP_EAVE` overhang. `roofSteps` are its colliders (stepped boxes,
+   * within 0.3 m of the planes; not anchors).
+   */
+  hipRoof?: { color: [number, number, number] };
+  roofSteps?: BoxSpec[];
+  /** Cumba bay windows: closed boxes projecting from the upper floors (colliders too). */
+  bays?: BoxSpec[];
 }
+
+/** Hip roof geometry shared by the generator (step colliders) and the renderer (tile planes). */
+export const HIP_PITCH = 0.4;
+export const HIP_LIFT = 0.3;
+export const HIP_EAVE = 0.3;
+/** Step colliders: 0.6 m tall, each inset 1.5 m (= HIP_PITCH), so the planes pass through the middle of each step. */
+export const HIP_STEP_H = 0.6;
 
 export const TREE_OAK = 0;
 export const TREE_PINE = 1;
 export const TREE_POPLAR = 2;
 export const TREE_MAPLE = 3;
+/** Plane tree (çınar): broad layered canopy (Istanbul). */
+export const TREE_PLANE = 4;
+/** Cypress (servi): columnar. */
+export const TREE_CYPRESS = 5;
+/** Stone pine (fıstık çamı): tall bare trunk under a flat umbrella. */
+export const TREE_STONEPINE = 6;
 
 export interface Tree {
   species: number;
@@ -170,6 +213,8 @@ export interface BridgeSpec {
 }
 
 export interface CityLayout {
+  /** Map this layout belongs to (src/maps/ids.ts). */
+  mapId: MapId;
   seed: number;
   land: Rect;
   islet: Rect;
@@ -193,4 +238,22 @@ export interface CityLayout {
   /** Spawn point on a sidewalk. */
   spawn: [number, number, number];
   stats: { buildings: number; parkTrees: number; streetTrees: number; maxHeight: number };
+  /** Sidewalk width between the curb and the building fronts (m); 5 when absent (Manhattan). */
+  sidewalk?: number;
+  /** Maps without a street grid: road centre lines with widths (Istanbul). */
+  roads?: RoadPiece[];
+  /** Land polygons (water is everything outside them). */
+  landPolygons?: Array<Array<[number, number]>>;
+  /** Park rectangles (grass), all maps without a single central park. */
+  parks?: Rect[];
+  /** Reserved landmark footprints (paved; landmark geometry stands there). */
+  landmarks?: Array<{ id: string; rect: Rect }>;
+}
+
+/** A road centre polyline with its full width and class (0 lane, 1 street, 2 arterial, 3 coastal). */
+export interface RoadPiece {
+  pts: Array<[number, number]>;
+  width: number;
+  cls: 0 | 1 | 2 | 3;
+  cars: boolean;
 }

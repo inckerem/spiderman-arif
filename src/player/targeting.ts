@@ -218,7 +218,7 @@ export class Targeting {
     const S = tuning.swing;
     const hy = py + tuning.body.ropeOffset;
     const d = Math.hypot(h.x - px, h.y - hy, h.z - pz);
-    if (d > (mode === 0 ? S.maxRange : tuning.zip.maxRange) || d < 2.5 || h.y <= 1.6) return false;
+    if (d > (mode === 0 ? S.maxRange : tuning.zip.maxRange) || d < 2.5 || h.y - this.world.terrain.baseHeight(h.x, h.z) <= 1.6) return false;
     if (h.nx * (px - h.x) + h.ny * (hy - h.y) + h.nz * (pz - h.z) <= -0.2) return false;
     if (mode === 1) return true;
     return h.ny < 0.7 && h.y >= py + S.minHeightAbove && h.y - hy >= Math.sin(S.minElevationDeg * DEG) * d;
@@ -333,7 +333,7 @@ export class Targeting {
           tz = pt.z - hz;
         const d = Math.sqrt(tx * tx + ty * ty + tz * tz);
         if (d > R || d < A.minDistance) continue;
-        if (pt.y < py + minAbove || pt.y < 1.6) continue;
+        if (pt.y < py + minAbove || pt.y - w.terrain.baseHeight(pt.x, pt.z) < 1.6) continue;
         if (mode === 0 && ty < sinMinElev * d) continue;
         // Surface must face the player.
         if (pt.nx * -tx + pt.ny * -ty + pt.nz * -tz < -0.05 * d) continue;
@@ -377,7 +377,7 @@ export class Targeting {
             fz = this.los.z;
           const fd = Math.hypot(fx - hx, fy - hy, fz - hz);
           const fElevOk = mode === 1 || fy - hy >= sinMinElev * fd;
-          if (fElevOk && fy >= py + minAbove && fy > 1.6 && fd >= A.minDistance && fd <= R && this.lineOfSight(hx, hy, hz, fx, fy, fz, bid)) {
+          if (fElevOk && fy >= py + minAbove && fy - w.terrain.baseHeight(fx, fz) > 1.6 && fd >= A.minDistance && fd <= R && this.lineOfSight(hx, hy, hz, fx, fy, fz, bid)) {
             out.valid = true;
             out.x = fx;
             out.y = fy;

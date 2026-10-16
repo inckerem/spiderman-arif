@@ -112,6 +112,21 @@ export const tr = {
       blackWhite: 'Siyah-Beyaz',
     },
   },
+  maps: {
+    title: 'Harita',
+    menu: 'Harita',
+    names: {
+      manhattan: 'Manhattan',
+      istanbul: 'İstanbul',
+    },
+    desc: {
+      manhattan: 'Izgara sokaklar, gökdelenler ve büyük park',
+      istanbul: 'Tepeler, camiler, köprüler ve Boğaz',
+    },
+    soon: 'Yakında',
+    hint: 'Başka bir harita seçince oyun yeniden yüklenir.',
+    loading: 'Harita yükleniyor…',
+  },
   bindings: {
     title: 'Tuş Atamaları',
     settingLabel: 'Tuş atamaları',
@@ -240,6 +255,9 @@ export const tr = {
     park: 'Park Rotası',
     downtown: 'Kuleler Rotası',
     waterfront: 'Rıhtım Rotası',
+    'ist-minare': 'Minare Rotası',
+    'ist-halic': 'Haliç Rotası',
+    'ist-bogaz': 'Boğaz Rotası',
   },
   photo: {
     title: 'Fotoğraf Modu',
@@ -324,6 +342,25 @@ export const tr = {
     'KÖPRÜ FIRIN',
     'NEON PİZZA',
   ],
+  /** Istanbul shop signs (M13): trades and fictional shop names, no real brands. */
+  signsIstanbul: [
+    'SİMİTÇİ',
+    'BÖREKÇİ',
+    'ÇAY OCAĞI',
+    'LOKANTA',
+    'ECZANE',
+    'KAHVEHANE',
+    'BERBER',
+    'BAKKAL',
+    'KASAP',
+    'MANAV',
+    'FIRIN',
+    'KURUYEMİŞ',
+    'DÖNERCİ',
+    'TATLICI',
+    'BALIKÇI',
+    'TERZİ',
+  ],
   billboards: [
     ['SKYTHREAD FM', '101.3'],
     ['ŞEHRİN ÜSTÜNDE', 'YENİ SEZON'],
@@ -387,7 +424,7 @@ export const tr = {
       codeInvalid: 'Kod 6 karakter olmalı.',
       joinCode: 'Koda Katıl',
       connecting: 'Sunucuya bağlanılıyor…',
-      seedMismatch: 'Çok oyunculu oyun standart şehirde oynanır: sayfayı ?seed olmadan aç.',
+      mapSwitchUnavailable: 'Oda haritasına geçmek için tarayıcıda oturum depolamasına izin ver.',
       invited: (code: string) => `Davet: ${code} kodlu odaya katılmak üzeresin.`,
     },
     room: {

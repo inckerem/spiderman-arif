@@ -8,7 +8,11 @@
  */
 import type { App } from '../app';
 import { tr } from '../i18n/tr';
-import { MAPS, type MapId } from './maps';
+import { isMapId, type MapId } from './maps';
+import { mapSwitchUrl } from '../maps/select';
+import { saveSettings } from '../ui/settings';
+import { checkName } from './names';
+import { isRoomCode } from './protocol';
 import { HOUR_BLEND_S, HOUR_SNAP, hourDelta, hoursPerSecond, wrapHour } from './clock';
 import { NetLink, type NetStatus } from './netLink';
 import { RemoteRoster, type RemoteView } from './remoteRoster';
@@ -19,6 +23,14 @@ import type { CombatIntent } from '../combat/types';
 import type { DebugOp } from '../sim/types';
 
 const TOKEN_KEY = 'skythread.net.session.v1';
+const JOIN_KEY = 'skythread.net.pending-join.v1';
+
+interface PendingJoin {
+  name: string;
+  map: MapId;
+  join: { kind: 'public' } | { kind: 'code'; code: string };
+  at: number;
+}
 /** Remote hero sounds fade out over this distance (m). */
 const SFX_RANGE = 45;
 
@@ -83,8 +95,9 @@ export class Online {
     this.lobby = new Lobby(app.ui, {
       onPublic: (name, map) => void this.start(name, map, { kind: 'public' }),
       onCreate: (name, map, pvp) => void this.start(name, map, { kind: 'create', pvp }),
-      onCode: (name, code) => void this.start(name, MAPS.manhattan.id, { kind: 'code', code }),
+      onCode: (name, code) => void this.start(name, app.game.mapId, { kind: 'code', code }),
     });
+    this.lobby.map.value = app.game.mapId;
   }
 
   get active(): boolean {
@@ -104,16 +117,52 @@ export class Online {
     return wrapHour(this.roomHourValue + ((performance.now() - this.roomHourAt) / 1000) * hoursPerSecond(this.roomDayLen));
   }
 
+  /** Continue a user-requested join after rebuilding the page on the room's map. */
+  resumePendingJoin(): boolean {
+    let pending: PendingJoin;
+    try {
+      const raw = sessionStorage.getItem(JOIN_KEY);
+      sessionStorage.removeItem(JOIN_KEY);
+      if (!raw) return false;
+      pending = JSON.parse(raw) as PendingJoin;
+      if (!pending || !checkName(pending.name).ok || !isMapId(pending.map) || pending.map !== this.app.game.mapId ||
+          !Number.isFinite(pending.at) || Date.now() - pending.at > 300_000 || Date.now() < pending.at ||
+          !(pending.join?.kind === 'public' || (pending.join?.kind === 'code' && isRoomCode(pending.join.code)))) return false;
+    } catch {
+      return false;
+    }
+    this.openLobby(pending.join.kind === 'code' ? pending.join.code : undefined);
+    this.lobby.name.value = pending.name;
+    void this.start(pending.name, pending.map, pending.join);
+    return true;
+  }
+
+  /** A different world requires a reload before any room state can drive the hero. */
+  private reloadForRoom(name: string, room: RoomInfo): void {
+    const join: PendingJoin['join'] = room.public ? { kind: 'public' } : { kind: 'code', code: room.code! };
+    try {
+      sessionStorage.setItem(JOIN_KEY, JSON.stringify({ name, map: room.map, join, at: Date.now() } satisfies PendingJoin));
+    } catch {
+      this.lobby.showError(tr.net.lobby.mapSwitchUnavailable);
+      return;
+    }
+    const ui = this.app.ui;
+    ui.settings.map = room.map;
+    saveSettings(ui.settings);
+    const url = new URL(mapSwitchUrl(location.href, room.map));
+    // Online worlds always use the fixed map seed, even after a custom single-player seed.
+    url.searchParams.delete('seed');
+    if (room.code) url.searchParams.set('oda', room.code);
+    else url.searchParams.delete('oda');
+    location.replace(url.href);
+  }
+
   // ---------------------------------------------------------------- session
 
   private async start(name: string, map: MapId, join: JoinRequest): Promise<void> {
     if (this.connecting || this.link) return;
     const app = this.app;
     const game = app.game;
-    if (join.kind !== 'code' && MAPS[map].seed !== app.seed) {
-      this.lobby.showError(tr.net.lobby.seedMismatch);
-      return;
-    }
     this.connecting = true;
     this.lobby.setBusy(true);
     const stored = readSession();
@@ -123,6 +172,7 @@ export class Online {
       name,
       costume: app.ui.settings.costume,
       map,
+      world: { map: game.mapId, seed: app.seed },
       join,
       token: sameRoom ? stored.token : undefined,
       player: game.player,
@@ -140,9 +190,11 @@ export class Online {
       } else this.lobby.showError(tr.net.reject[r.why]);
       return;
     }
-    if (r.room.seed !== app.seed) {
+    if (!r.accepted) {
+      // The provisional connection has not uploaded or activated combat in this world.
+      // Rejoin private rooms by their assigned code so a create is never repeated.
       link.close();
-      this.lobby.showError(tr.net.lobby.seedMismatch);
+      this.reloadForRoom(name, r.room);
       return;
     }
     this.lobby.setBusy(false);
@@ -196,6 +248,8 @@ export class Online {
     };
     // The shared clock.
     this.savedDayLen = game.dayNight.dayLengthMinutes;
+    // Welcome arrives before activate() attaches onClock; replay it before showing room time.
+    link.syncClock();
     game.dayNight.dayLengthMinutes = this.roomDayLen;
     // The room drives the hour (frame()); the local advance stays off while online.
     game.dayNight.paused = true;
@@ -338,7 +392,11 @@ export class Online {
 
   inviteUrl(): string {
     const code = this.link?.room?.code;
-    return code ? `${location.origin}${location.pathname}?oda=${code}` : '';
+    if (!code || !this.link?.room) return '';
+    const url = new URL(location.pathname, location.origin);
+    url.searchParams.set('oda', code);
+    url.searchParams.set('harita', this.link.room.map);
+    return url.href;
   }
 
   private refreshPanel(): void {

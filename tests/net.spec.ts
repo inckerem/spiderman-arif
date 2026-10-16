@@ -26,7 +26,7 @@ type NetState = {
   status: string;
   pid: number;
   name: string;
-  room: { id: string; code?: string; pvp: boolean; public: boolean; index: number } | null;
+  room: { id: string; map: 'manhattan' | 'istanbul'; seed: number; code?: string; pvp: boolean; public: boolean; index: number } | null;
   tp: number;
   players: Array<{ pid: number; name: string }>;
   remotes: Array<{ pid: number; name: string; x: number; y: number; z: number; lod: number; inView: boolean; webVisible: boolean }>;
@@ -80,10 +80,14 @@ async function joinVia(p: Page, name: string, how: { kind: 'public' } | { kind: 
   }
   await p.locator(how.kind === 'public' ? '.sk-join-public' : how.kind === 'create' ? '.sk-create' : '.sk-join-code').click();
   try {
-    await p.waitForFunction(() => (window as any).__net.state().active, null, { timeout: 120_000 });
+    // Cross-map joins intentionally navigate: the new page installs both APIs after boot.
+    await p.waitForFunction(() => {
+      const w = window as any;
+      return w.__game?.ready === true && w.__net?.state().active === true;
+    }, null, { timeout: 120_000 });
   } catch (e) {
     const status = await p.locator('.sk-lobby-status').textContent();
-    const st = await p.evaluate(() => JSON.stringify((window as any).__net.state()).slice(0, 400));
+    const st = await p.evaluate(() => JSON.stringify((window as any).__net?.state() ?? { booting: true }).slice(0, 400));
     throw new Error(`join failed: status "${status}" state ${st} (${(e as Error).message})`);
   }
   await p.evaluate(() => {
@@ -103,12 +107,14 @@ async function screenshot(p: Page, file: string): Promise<void> {
 }
 
 /** A strike intent at another player (the router targets enemies; PvP checks use the link directly). */
-async function strikeHero(p: Page, targetPid: number, seq = 1): Promise<void> {
-  await p.evaluate(
+async function strikeHero(p: Page, targetPid: number, seq = 1): Promise<number> {
+  return p.evaluate(
     ([pid, sq, base]) => {
       const n = (window as any).__net;
       const q = (window as any).__game.game.player.pos;
-      n.intent({ k: 'strike', seq: sq, target: base + pid, move: 0, viewT: n.state().now - 0.1, hx: q.x, hy: q.y, hz: q.z });
+      const viewT = n.state().now - 0.1;
+      n.intent({ k: 'strike', seq: sq, target: base + pid, move: 0, viewT, hx: q.x, hy: q.y, hz: q.z });
+      return viewT;
     },
     [targetPid, seq, HERO],
   );
@@ -314,7 +320,7 @@ test('private rooms: create with PvP, join by invite link and by typed code; PvP
   // PvP: A hits B.
   await standInFront(a.page, b.page, 1.2);
   await sleep(500);
-  await strikeHero(a.page, sb.pid, 7);
+  const previousStrikeT = await strikeHero(a.page, sb.pid, 7);
   await b.page.waitForFunction(() => (window as any).__net.state().self.hp < 100, null, { timeout: 15_000 });
 
   // A shared enemy: spawned by A next to both, struck by A; both clients agree on its health.
@@ -322,6 +328,12 @@ test('private rooms: create with PvP, join by invite link and by typed code; PvP
   await a.page.evaluate(([ex, ey, ez]) => (window as any).__net.dbg('spawn', [0, ex + 1.3, ey, ez]), [x, y, z]);
   const id = await a.page.waitForFunction(() => (window as any).__net.state().enemies[0]?.id ?? 0, null, { timeout: 15_000 }).then((h) => h.jsonValue() as Promise<number>);
   await b.page.waitForFunction((eid) => (window as any).__net.state().enemies.some((e: any) => e.id === eid), id, { timeout: 15_000 });
+  // Raw intents bypass the router's attack cadence. Synchronize in room time so
+  // the shared-enemy strike is legal even when the preceding PvP hit arrives quickly.
+  await a.page.waitForFunction((last) => {
+    const w = window as any;
+    return w.__net.state().now - 0.1 >= last + w.__game.tuning.combat.minStrikeInterval;
+  }, previousStrikeT);
   await strikeEnemy(a.page, id, 8);
   const hpA = await a.page.waitForFunction((eid) => {
     const e = (window as any).__net.state().enemies.find((q: any) => q.id === eid);
@@ -356,4 +368,62 @@ test('no server: the lobby falls back to single player with a toast', async ({ b
   expect(await a.page.evaluate(() => (window as any).__game.game.link.online)).toBe(false);
   expectQuiet(a, [/WebSocket connection to 'ws:\/\/127\.0\.0\.1:9\/ws' failed/]);
   await a.close();
+});
+
+// Integration: the room's world must be built before its snapshots or corrections can drive play.
+test('lobby map selection and custom seeds rebuild the page on the room world', async ({ browser }) => {
+  test.setTimeout(600_000);
+  const a = await client(browser, '/?seed=42');
+  try {
+    await a.page.locator('.sk-btn-mp').click();
+    await a.page.locator('.sk-lobby select').selectOption('istanbul');
+    const first = await joinVia(a.page, 'HaritaGezgini', { kind: 'public' });
+    expect(first.room?.map).toBe('istanbul');
+    expect(new URL(a.page.url()).searchParams.get('harita')).toBe('istanbul');
+    expect(new URL(a.page.url()).searchParams.has('seed')).toBe(false);
+    expect(await a.page.evaluate(() => {
+      const g = (window as any).__game;
+      g.drawPaused(true);
+      return { map: g.mapId, seed: g.game.layout.seed };
+    })).toEqual({ map: 'istanbul', seed: first.room!.seed });
+    await a.page.evaluate(() => (window as any).__net.leave());
+    // Same map, a different single-player seed: online still rebuilds from the fixed seed.
+    await a.page.goto('/?harita=istanbul&seed=43');
+    await a.page.waitForFunction(() => (window as any).__game?.ready === true, null, { timeout: 180_000 });
+    await a.page.evaluate(() => (window as any).__game.drawPaused(true));
+    const second = await joinVia(a.page, 'HaritaGezgini', { kind: 'public' });
+    expect(second.room?.map).toBe('istanbul');
+    expect(new URL(a.page.url()).searchParams.has('seed')).toBe(false);
+    expect(await a.page.evaluate(() => (window as any).__game.game.layout.seed)).toBe(second.room!.seed);
+    expectQuiet(a);
+  } finally {
+    await a.close();
+  }
+});
+
+test('private code rebuilds the other map and keeps the original room and PvP', async ({ browser }) => {
+  test.setTimeout(600_000);
+  const a = await client(browser, '/?harita=manhattan');
+  let b: Client | null = null;
+  try {
+    await a.page.locator('.sk-btn-mp').click();
+    await a.page.locator('.sk-lobby select').selectOption('istanbul');
+    // Creation itself crosses maps: the reload must rejoin by code, not create a second room.
+    const sa = await joinVia(a.page, 'OdaKurucu', { kind: 'create', pvp: true });
+    await a.page.evaluate(() => (window as any).__game.drawPaused(true));
+    expect(sa.room?.map).toBe('istanbul');
+    expect(sa.room?.pvp).toBe(true);
+    expect(new URL(sa.invite).searchParams.get('harita')).toBe('istanbul');
+    b = await client(browser, '/?harita=manhattan');
+    const sb = await joinVia(b.page, 'KodGezgini', { kind: 'code', code: sa.room!.code });
+    await b.page.evaluate(() => (window as any).__game.drawPaused(true));
+    expect(sb.room).toEqual(sa.room);
+    expect(await b.page.evaluate(() => (window as any).__game.mapId)).toBe('istanbul');
+    await a.page.waitForFunction(() => (window as any).__net.state().players.length === 1, null, { timeout: 15_000 });
+    expectQuiet(a);
+    expectQuiet(b);
+  } finally {
+    if (b) await b.close();
+    await a.close();
+  }
 });

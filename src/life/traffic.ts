@@ -3,43 +3,21 @@ import { GeomBuilder } from '../render/geomBuilder';
 import { shared, toonGradient, withMRT } from '../render/materials';
 import { CAR_COLORS } from '../world/render/propsGeo';
 import { Rng } from '../core/rng';
-import type { CityLayout, Road } from '../world/types';
+import type { CityLayout } from '../world/types';
+import { SIGNAL_CYCLE, laneNetFor, type LaneLink, type LaneNode } from './roadNet';
+import { getMap } from '../maps/registry';
 
-/** Directions: 0 north (-Z), 1 east (+X), 2 south (+Z), 3 west (-X). */
-const DX = [0, 1, 0, -1];
-const DZ = [-1, 0, 1, 0];
 const CAR_LEN = 4.6;
 const MIN_GAP = 2.6;
 const ACCEL = 3.2;
 const DECEL = 6.5;
 /** Traffic light cycle (s): north-south green, yellow, east-west green, yellow. */
-const CYCLE = 26;
+const CYCLE = SIGNAL_CYCLE;
 const GREEN = 11;
 const YELLOW = 2;
 
-interface Node {
-  x: number;
-  z: number;
-  /** Half widths of the avenue (x extent) and street (z extent) at this node. */
-  hx: number;
-  hz: number;
-  /** Outgoing link per direction (-1 = none). */
-  out: [number, number, number, number];
-  offset: number;
-}
-
-interface Link {
-  from: number;
-  to: number;
-  dir: number;
-  /** Lane centre offset to the right of travel. */
-  lane: number;
-  /** Driving distance from the exit of `from` to the stop line of `to`. */
-  len: number;
-  /** Start point on the lane (just past the `from` intersection). */
-  sx: number;
-  sz: number;
-  /** Car ids on the link, front first. */
+/** A lane link with the cars on it, front first. */
+interface Link extends LaneLink {
   cars: number[];
 }
 
@@ -63,11 +41,7 @@ interface Car {
   x: number;
   z: number;
   yaw: number;
-}
-
-function laneOffset(r: Road): number {
-  // Streets keep a parking lane at the curb; avenues use the inner lanes.
-  return Math.min(4.2, Math.max(2.6, r.width * 0.17));
+  pitch: number;
 }
 
 /** Car geometry with per-vertex paint mask, light emission and taxi-sign flags. */
@@ -135,8 +109,12 @@ function carGeometry(): ReturnType<GeomBuilder['build']> {
  */
 export class Traffic {
   readonly mesh: InstancedMesh;
-  private readonly nodes: Node[] = [];
+  private readonly nodes: LaneNode[] = [];
   private readonly links: Link[] = [];
+  /** Road level under a car (terrain of the map). */
+  private readonly ground: (x: number, z: number) => number;
+  private readonly q2 = new Quaternion();
+  private readonly right = new Vector3(1, 0, 0);
   private readonly cars: Car[] = [];
   private active = 0;
   private time = 0;
@@ -157,6 +135,8 @@ export class Traffic {
     seed: number,
   ) {
     this.rng = new Rng(seed * 31 + 7);
+    const terrain = getMap(layout.mapId).createTerrain(layout);
+    this.ground = (x, z) => terrain.baseHeight(x, z);
     this.buildGraph();
     const geo = carGeometry();
     this.brake = new InstancedBufferAttribute(new Float32Array(capacity), 1);
@@ -222,6 +202,7 @@ vEmit = aEmit > 1.5 ? 0.35 + 0.65 * iBrake + 0.01 : aEmit;`,
         x: 0,
         z: 0,
         yaw: 0,
+        pitch: 0,
       });
     }
     this.mesh.count = 0;
@@ -239,79 +220,41 @@ vEmit = aEmit > 1.5 ? 0.35 + 0.65 * iBrake + 0.01 : aEmit;`,
     return this.links.length;
   }
 
+  /** The lane graph: the street grid on Manhattan, the road pieces on Istanbul (see roadNet.ts). */
   private buildGraph(): void {
-    const L = this.layout;
-    const P = L.park;
-    const A = L.avenues,
-      S = L.streets;
-    const inParkX = (x: number): boolean => x > P.minX + 1 && x < P.maxX - 1;
-    const inParkZ = (z: number): boolean => z > P.minZ + 1 && z < P.maxZ - 1;
-    const idx = (i: number, j: number): number => i * S.length + j;
-    for (let i = 0; i < A.length; i++) {
-      for (let j = 0; j < S.length; j++) {
-        this.nodes.push({
-          x: A[i]!.center,
-          z: S[j]!.center,
-          hx: A[i]!.width / 2,
-          hz: S[j]!.width / 2,
-          out: [-1, -1, -1, -1],
-          offset: (i * 2.9 + j * 4.3) % CYCLE,
-        });
-      }
-    }
-    const addLink = (a: number, b: number, dir: number, lane: number): void => {
-      const na = this.nodes[a]!,
-        nb = this.nodes[b]!;
-      // Exit of A and stop line of B along the travel axis.
-      const ha = dir % 2 === 0 ? na.hz : na.hx;
-      const hb = dir % 2 === 0 ? nb.hz : nb.hx;
-      const full = Math.abs(nb.x - na.x) + Math.abs(nb.z - na.z);
-      const len = full - ha - hb;
-      if (len < 6) return;
-      // Right of travel: (-DZ, DX) rotated -> for north (0,-1) right is +X.
-      const rx = -DZ[dir]!,
-        rz = DX[dir]!;
-      const id = this.links.length;
-      this.links.push({
-        from: a,
-        to: b,
-        dir,
-        lane,
-        len,
-        sx: na.x + DX[dir]! * ha + rx * lane,
-        sz: na.z + DZ[dir]! * ha + rz * lane,
-        cars: [],
-      });
-      na.out[dir] = id;
-    };
-    for (let i = 0; i < A.length; i++) {
-      for (let j = 0; j < S.length - 1; j++) {
-        // Avenue i between street j and j+1 (skip the park interior).
-        const midZ = (S[j]!.center + S[j + 1]!.center) / 2;
-        if (inParkX(A[i]!.center) && inParkZ(midZ)) continue;
-        const lane = laneOffset(A[i]!);
-        addLink(idx(i, j + 1), idx(i, j), 0, lane); // northbound (-Z)
-        addLink(idx(i, j), idx(i, j + 1), 2, lane); // southbound (+Z)
-      }
-    }
-    for (let j = 0; j < S.length; j++) {
-      for (let i = 0; i < A.length - 1; i++) {
-        const midX = (A[i]!.center + A[i + 1]!.center) / 2;
-        if (inParkZ(S[j]!.center) && inParkX(midX)) continue;
-        const lane = laneOffset(S[j]!);
-        addLink(idx(i, j), idx(i + 1, j), 1, lane); // eastbound
-        addLink(idx(i + 1, j), idx(i, j), 3, lane); // westbound
-      }
-    }
+    const net = laneNetFor(this.layout);
+    for (const n of net.nodes) this.nodes.push(n);
+    for (const l of net.links) this.links.push({ ...l, cars: [] });
   }
 
-  /** Green for travel direction `dir` at node `n` (yellow counts as stop). */
-  private green(n: Node, dir: number): boolean {
+  /** Green for a link arriving at node `n` (north-south or east-west phase by its heading; yellow counts as stop). */
+  private green(n: LaneNode, l: LaneLink): boolean {
+    if (!n.signal) return true;
     const t = (this.time + n.offset) % CYCLE;
     const ns = t < GREEN;
     const ew = t >= GREEN + YELLOW && t < 2 * GREEN + YELLOW;
-    return dir % 2 === 0 ? ns : ew;
+    return Math.abs(l.ez) >= Math.abs(l.ex) ? ns : ew;
   }
+
+  /** Point and heading on a link at arc length s. */
+  private along(l: Link, s: number, out: { x: number; z: number; hx: number; hz: number }): void {
+    const n = l.cum.length;
+    let i = 0;
+    while (i < n - 2 && l.cum[i + 1]! < s) i++;
+    const seg = l.cum[i + 1]! - l.cum[i]!;
+    const t = seg > 0 ? Math.max(0, Math.min(1, (s - l.cum[i]!) / seg)) : 0;
+    const ax = l.pts[i * 2]!,
+      az = l.pts[i * 2 + 1]!,
+      bx = l.pts[i * 2 + 2]!,
+      bz = l.pts[i * 2 + 3]!;
+    out.x = ax + (bx - ax) * t;
+    out.z = az + (bz - az) * t;
+    const d = Math.hypot(bx - ax, bz - az) || 1;
+    out.hx = (bx - ax) / d;
+    out.hz = (bz - az) / d;
+  }
+
+  private readonly ap = { x: 0, z: 0, hx: 0, hz: 1 };
 
   /** Set the number of active cars (quality preset); new cars spawn around the given point. */
   setCount(n: number, nearX = 0, nearZ = 0): void {
@@ -342,8 +285,9 @@ vEmit = aEmit > 1.5 ? 0.35 + 0.65 * iBrake + 0.01 : aEmit;`,
       const link = this.links[li]!;
       const s = this.rng.float() * Math.max(0, link.len - CAR_LEN);
       if (maxR < Infinity) {
-        const px = link.sx + DX[link.dir]! * s,
-          pz = link.sz + DZ[link.dir]! * s;
+        this.along(link, s, this.ap);
+        const px = this.ap.x,
+          pz = this.ap.z;
         const d = Math.hypot(px - nearX, pz - nearZ);
         if (d < minR || d > maxR) continue;
         // Out of view: behind the camera, or beyond 220 m.
@@ -381,22 +325,42 @@ vEmit = aEmit > 1.5 ? 0.35 + 0.65 * iBrake + 0.01 : aEmit;`,
       return;
     }
     const l = this.links[car.link]!;
-    car.x = l.sx + DX[l.dir]! * car.s;
-    car.z = l.sz + DZ[l.dir]! * car.s;
-    car.yaw = Math.atan2(DX[l.dir]!, DZ[l.dir]!);
+    this.along(l, car.s, this.ap);
+    car.x = this.ap.x;
+    car.z = this.ap.z;
+    car.yaw = Math.atan2(this.ap.hx, this.ap.hz);
   }
 
-  /** Choose the next link at node `n` arriving with direction `dir`. */
-  private choose(n: Node, dir: number): number {
-    const straight = n.out[dir]!;
-    const right = n.out[(dir + 1) % 4]!;
-    const left = n.out[(dir + 3) % 4]!;
+  /**
+   * Choose the next link at node `n` arriving with heading (hx, hz): straight
+   * (within 30 degrees) 68 %, else right, else left; a U-turn only at a dead end.
+   */
+  private choose(n: LaneNode, hx: number, hz: number): number {
+    let straight = -1,
+      right = -1,
+      left = -1,
+      back = -1;
+    let bs = -2;
+    for (const li of n.out) {
+      const o = this.links[li]!;
+      const dot = hx * o.sx + hz * o.sz;
+      const cross = hx * o.sz - hz * o.sx;
+      if (dot > 0.866) {
+        if (dot > bs) {
+          bs = dot;
+          straight = li;
+        }
+      } else if (dot < -0.866) back = li;
+      else if (cross > 0) {
+        if (right < 0) right = li;
+      } else if (left < 0) left = li;
+    }
     const r = this.rng.float();
     if (straight >= 0 && (r < 0.68 || (right < 0 && left < 0))) return straight;
     if (right >= 0 && (r < 0.9 || left < 0)) return right;
     if (left >= 0) return left;
     if (straight >= 0) return straight;
-    return n.out[(dir + 2) % 4]!; // dead end: U-turn
+    return back; // dead end: U-turn
   }
 
   update(dt: number, playerX: number, playerZ: number, viewX = 0, viewZ = 0): void {
@@ -428,7 +392,7 @@ vEmit = aEmit > 1.5 ? 0.35 + 0.65 * iBrake + 0.01 : aEmit;`,
       const list = link.cars;
       if (list.length === 0) continue;
       const node = this.nodes[link.to]!;
-      const green = this.green(node, link.dir);
+      const green = this.green(node, link);
       let leaderS = Infinity;
       for (let k = 0; k < list.length; k++) {
         const car = this.cars[list[k]!]!;
@@ -477,7 +441,13 @@ vEmit = aEmit > 1.5 ? 0.35 + 0.65 * iBrake + 0.01 : aEmit;`,
       const car = this.cars[i]!;
       this.pose(car);
       this.q.setFromAxisAngle(this.up, car.yaw);
-      this.p.set(car.x, 0, car.z);
+      // On a slope the car follows the road level and pitches with it (0 on a flat map).
+      const y = this.ground(car.x, car.z);
+      const fx = Math.sin(car.yaw),
+        fz = Math.cos(car.yaw);
+      const rise = this.ground(car.x + fx * 1.6, car.z + fz * 1.6) - this.ground(car.x - fx * 1.6, car.z - fz * 1.6);
+      if (rise !== 0) this.q.multiply(this.q2.setFromAxisAngle(this.right, -Math.atan2(rise, 3.2)));
+      this.p.set(car.x, y, car.z);
       this.m.compose(this.p, this.q, this.sc);
       mesh.setMatrixAt(i, this.m);
       this.brake.setX(i, car.braking ? 1 : 0);
@@ -486,8 +456,8 @@ vEmit = aEmit > 1.5 ? 0.35 + 0.65 * iBrake + 0.01 : aEmit;`,
     this.brake.needsUpdate = true;
   }
 
-  private enterTurn(car: Car, link: Link, node: Node): void {
-    const next = this.choose(node, link.dir);
+  private enterTurn(car: Car, link: Link, node: LaneNode): void {
+    const next = this.choose(node, link.ex, link.ez);
     if (next < 0) {
       // Isolated link (should not happen): wrap to its start.
       car.s = 0;
@@ -498,20 +468,22 @@ vEmit = aEmit > 1.5 ? 0.35 + 0.65 * iBrake + 0.01 : aEmit;`,
     car.turning = true;
     car.next = next;
     car.t = 0;
-    car.p0x = link.sx + DX[link.dir]! * link.len;
-    car.p0z = link.sz + DZ[link.dir]! * link.len;
-    car.p1x = out.sx;
-    car.p1z = out.sz;
-    if (out.dir === link.dir || out.dir === (link.dir + 2) % 4) {
-      car.cx = (car.p0x + car.p1x) / 2;
-      car.cz = (car.p0z + car.p1z) / 2;
-    } else if (link.dir % 2 === 0) {
-      // Travelling along Z, leaving along X: corner at (lane x, out lane z).
-      car.cx = car.p0x;
-      car.cz = car.p1z;
-    } else {
-      car.cx = car.p1x;
-      car.cz = car.p0z;
+    const n = link.pts.length;
+    car.p0x = link.pts[n - 2]!;
+    car.p0z = link.pts[n - 1]!;
+    car.p1x = out.pts[0]!;
+    car.p1z = out.pts[1]!;
+    // Control point: where the arriving and the leaving lane lines meet (the corner of a turn), else the middle.
+    const cross = link.ex * out.sz - link.ez * out.sx;
+    car.cx = (car.p0x + car.p1x) / 2;
+    car.cz = (car.p0z + car.p1z) / 2;
+    if (Math.abs(cross) > 0.2) {
+      const t = ((car.p1x - car.p0x) * out.sz - (car.p1z - car.p0z) * out.sx) / cross;
+      const span = Math.hypot(car.p1x - car.p0x, car.p1z - car.p0z);
+      if (t > 0 && t < span * 1.5) {
+        car.cx = car.p0x + link.ex * t;
+        car.cz = car.p0z + link.ez * t;
+      }
     }
     car.arc = Math.max(1, (Math.hypot(car.cx - car.p0x, car.cz - car.p0z) + Math.hypot(car.p1x - car.cx, car.p1z - car.cz)) * 0.92);
   }

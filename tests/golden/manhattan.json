@@ -1,0 +1,24 @@
+{
+  "layout": "1eb231e6e1c5af",
+  "colliders": "18cf17f8037260",
+  "fuzz": "1bcd83acd50a6e",
+  "anchors": "191aaa79368546",
+  "city": "139039e42aceac",
+  "park": "1a68b00f52a634",
+  "attract": "06762355d1ebb2",
+  "summary": {
+    "buildings": 1084,
+    "trees": 2265,
+    "colliders": 23343,
+    "fuzzInside": 0,
+    "fuzzSplashes": 0,
+    "anchorsInRange": 175,
+    "anchorsFound": 174,
+    "cityReached": true,
+    "cityDistance": 2439.762,
+    "parkReached": true,
+    "parkDistance": 527.169,
+    "attractDistance": 3325.615,
+    "attractSwings": 68
+  }
+}

@@ -8,7 +8,7 @@ Bu dosya, bulutta (Claude Code on the web) yürütülen çalışmanın **nerede 
 
 ## 1. Kısa durum (16 Ekim 2026)
 
-Branch: **`claude/optimistic-meitner-699dlz`** (GitHub: `inckerem/spiderman-arif`). Bu branch'teki her şey derleniyor ve test edildi; yarım kalan işler ayrı dosyalarda (aşağıda).
+Branch: **`claude/optimistic-meitner-699dlz`** (GitHub: `inckerem/spiderman-arif`). C10 entegrasyonunun derleme, hedefli test ve bağımsız inceleme kapısı tamamlandı; tam son test kapısı ve aşağıdaki yarım işler devam ediyor.
 
 | Aşama | Konu | Durum |
 | --- | --- | --- |
@@ -17,8 +17,16 @@ Branch: **`claude/optimistic-meitner-699dlz`** (GitHub: `inckerem/spiderman-arif
 | M10 | Mobil dokunmatik kontroller | ✅ Bitti |
 | M11 | Dövüş ve düşmanlar | 🟡 7/9 parça bitti — **boss'lar ve son cila kaldı** |
 | M12 | Multiplayer, odalar, Docker, Nginx | ✅ Bitti (2 küçük iş yarım, yama dosyasında) |
-| M13 | İstanbul haritası | 🟡 C0–C10 bitti, C11 yarım — **ayrı kolda, bundle dosyasında, henüz birleştirilmedi** |
+| M13 | İstanbul haritası | 🟡 **C0–C10 birleştirildi ve test edildi**; sırada C11 (WIP ayrı kolda) |
 | Son | Her şeyi birleştir, tam testleri iki haritada koş | ⏳ Yapılmadı |
+
+### C10 entegrasyon kontrol noktası (16 Ekim 2026)
+
+`223c490` (C10) mevcut dala birleştirildi; harita seçimi/kancaları, dövüş HUD’ı, suç olayları ve online/lobi birlikte korundu. Farklı harita veya özel seed’den odaya giriş doğru dünya yüklenerek sürer; davet linki haritayı taşır. Dünya kabul edilmeden welcome/paketler konum yükleyemez veya combat görünümünü değiştiremez. İlk oda saati geç bağlanan dinleyiciye aktarılır; ham test saldırıları sunucunun saldırı aralığına oda zamanı üzerinden uyar. `ws` iki açık için dar kapsamlı olarak `8.22.0` sürümüne yükseltildi; audit sıfır açık bildiriyor.
+
+**Tamamlanan kapı:** `typecheck`, `build`, `build:server`, **67/67 Node testi**, **24/24 hedefli tarayıcı testi** (19 harita/oyun testi ve ardından 5/5 ağ testi); bağımsız incelemelerin son turunda açık bulgu yok. Tarayıcı kapısı macOS Metal ile, ağ senaryoları ayrı `5302`/`8797` portlarında koştu. Manhattan golden özeti değişmedi. **Tam 30 dakikalık soak, iki haritada nihai tam paket ve Docker/Nginx son kapısı henüz koşulmadı.**
+
+**Sıradaki iş C11:** landmark ayrıntıları/gece ışıkları ve 12 yapı için öğlen/gece görsel incelemesi. `f1764df` (C11 WIP) ve M12 yaması bu entegrasyona uygulanmadı; C11–C13 ve sonraki işler tamamlanmış sayılmaz.
 
 ### Yarım kalan işler nerede?
 
@@ -36,7 +44,7 @@ Branch: **`claude/optimistic-meitner-699dlz`** (GitHub: `inckerem/spiderman-arif
 - **M10:** Telefonda joystick, sağ yarıda kaydırarak bakış, AĞ/ÇEK/ZIPLA/DALIŞ/TIRMAN/SALDIRI butonları, duraklat; fare kilidi olmadan oynanış; dikey ekranda "çevir" uyarısı; ilk açılışta Düşük kalite.
 - **M11 (1–7. parçalar):** Saf (DOM'suz) dövüş simülasyonu `src/combat/**` — hem tek oyunculuda tarayıcıda hem sunucuda aynı kod. Bağlama göre sol tık (düşman varsa kombo + atılma, yoksa ağ), sağ tık ağla çekme/yapıştırma, Boşluk ile kaçınma, F = saldırı, E = bitirme. Düşmanlar: Sokak Serserisi, Sopalı, Silahlı, Kalkanlı, Dron (instanced GPU skinning ile çiziliyor). Suç olayları, mini harita işaretleri, ışık sütunu, can barı, kombo, "KAÇ!" uyarısı, dövüş sesleri.
 - **M12:** `server/` (Node + `ws`), tek port: oyun dosyaları + `/ws` + `/healthz`. Her haritanın genel odası (16 kişi, dolunca "#2"), 6 haneli kodlu özel oda + `?oda=KOD` davet linki, PvP sadece özel odada. Hareket istemcide, dövüş sunucuda. İsim kuralları + küfür filtresi, hile düzeltme/atma, yeniden bağlanma. Lobi ("Çok Oyunculu"), isim etiketleri, diğer oyuncular kendi rig/animasyonlarıyla. `Dockerfile`, `docker-compose.yml`, `deploy/nginx/skythread.conf`.
-- **M13 (C0–C10, ayrı kolda):** Harita soyutlaması (`src/maps/*`), tepeli zemin, su maskesi, sıkıştırılmış gerçek coğrafyalı İstanbul (Tarihi Yarımada, Haliç ve köprüleri, Galata, Boğaz ve 15 Temmuz Köprüsü, Üsküdar), landmark çarpışmaları, İstanbul'da otomatik oynama, trafik/yaya, su köpüğü, 3 yarış rotası, mini harita, İstanbul binaları/çatıları/ağaçları. Manhattan her adımda "golden" testle birebir aynı kaldı.
+- **M13 (C0–C10, bu dala birleştirildi):** Harita soyutlaması (`src/maps/*`), tepeli zemin, su maskesi, sıkıştırılmış gerçek coğrafyalı İstanbul (Tarihi Yarımada, Haliç ve köprüleri, Galata, Boğaz ve 15 Temmuz Köprüsü, Üsküdar), landmark çarpışmaları, İstanbul'da otomatik oynama, trafik/yaya, su köpüğü, 3 yarış rotası, mini harita, İstanbul binaları/çatıları/ağaçları. Manhattan her adımda "golden" testle birebir aynı kaldı.
 
 Ayrıntılı kararlar: `docs/ROADMAP.md` (Decisions), `docs/DECISIONS.md`, tasarımlar `docs/design/m11-m12-combat-multiplayer.md` ve `docs/design/m13-istanbul.md`, aşama kayıtları `docs/MILESTONES.md`.
 
@@ -44,16 +52,13 @@ Ayrıntılı kararlar: `docs/ROADMAP.md` (Decisions), `docs/DECISIONS.md`, tasar
 
 ## 3. Kalan işler (sırasıyla)
 
-1. **İstanbul kolunu geri yükle ve birleştir** (bkz. bölüm 5.3).
-   - Önce sadece bitmiş kısmı birleştir: `223c490` (C10). Beklenen çakışmalar: `src/app.ts`, `src/game.ts`, `src/ui/ui.ts`, `src/ui/minimap.ts`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`. İki tarafın davranışı da korunmalı (ana kolda: online/lobi, dövüş HUD'ı, suç olayları; İstanbul kolunda: harita seçimi, harita kancaları).
-   - Sonra `npm run typecheck`, `npm run build`, `npm run build:server`, `npm run test:server`, ve şu testler: `golden`, `smoke`, `map-switch`, `istanbul`, `anchors-istanbul`, `traversal-istanbul`, `combat`, `net`.
-2. **M13 C11'i bitir:** landmark detayları + gece ışıkları (WIP commit `f1764df` başlangıç noktası, doğrulanmadı) ve `tests/istanbul-landmarks.spec.ts` (12 landmark, öğlen + gece, ≤ 600 draw call, ≤ 2 M üçgen). Ekran görüntülerine bakıp oranları `docs/design/m13-istanbul.md` tablosuna göre düzelt.
-3. **M13 C12:** vapurlar, martılar, tramvay, balıkçılar; İstanbul'da 10 dakikalık soak.
-4. **M13 C13:** İstanbul'da otomatik oynama testi, README/ARCHITECTURE/DECISIONS güncelle, iki haritada tam test.
-5. **M11 parça 8 — boss'lar:** Koçbaşı (zırhlı, hücum eden dev), Kuzgun (kanatlı uçan), Diken (akrep kuyruklu). `CombatSim.bosses = true` ile her 4. olay boss olur; `startEvent('boss')` boss'u + yardımcıları doğuruyor ama boss henüz hareketsiz. Boss rig'leri (şu an en yakın türün rig'i kullanılıyor), özel saldırılar, boss can barı. Bkz. tasarım M11 §2, §10.
-6. **M11 parça 9 — sertleştirme:** dövüş botu her olay türünü ve boss'ları temizlesin; fuzz/soak'a dövüş ve suç olaylarını ekle; mobilde SALDIRI yazısı butondan taşıyor; `docs/MILESTONES.md` M11 kaydı.
-7. **M12 açık işler:** `devam/wip-m12-pvp-mouse-ve-uzak-sesler.patch` (PvP'de fareyle hedefleme, diğer oyuncuların dövüş sesleri) — uygula, `net.spec`'e test ekle. Tarayıcıda 15 bot + oyuncu performans ölçümü. Yeni client ile Docker'ı bir kez daha dene.
-8. **Son kapı:** sakin bir makinede tam `npm test` (soak dahil), `npm run test:server`, Docker + Nginx denemesi; `README.md` ve `docs/MILESTONES.md` son hali; push.
+1. **M13 C11'i bitir:** landmark detayları + gece ışıkları (WIP commit `f1764df` başlangıç noktası, doğrulanmadı) ve `tests/istanbul-landmarks.spec.ts` (12 landmark, öğlen + gece, ≤ 600 draw call, ≤ 2 M üçgen). Ekran görüntülerine bakıp oranları `docs/design/m13-istanbul.md` tablosuna göre düzelt.
+2. **M13 C12:** vapurlar, martılar, tramvay, balıkçılar; İstanbul'da 10 dakikalık soak.
+3. **M13 C13:** İstanbul'da otomatik oynama testi, README/ARCHITECTURE/DECISIONS güncelle, iki haritada tam test.
+4. **M11 parça 8 — boss'lar:** Koçbaşı (zırhlı, hücum eden dev), Kuzgun (kanatlı uçan), Diken (akrep kuyruklu). `CombatSim.bosses = true` ile her 4. olay boss olur; `startEvent('boss')` boss'u + yardımcıları doğuruyor ama boss henüz hareketsiz. Boss rig'leri (şu an en yakın türün rig'i kullanılıyor), özel saldırılar, boss can barı. Bkz. tasarım M11 §2, §10.
+5. **M11 parça 9 — sertleştirme:** dövüş botu her olay türünü ve boss'ları temizlesin; fuzz/soak'a dövüş ve suç olaylarını ekle; mobilde SALDIRI yazısı butondan taşıyor; `docs/MILESTONES.md` M11 kaydı.
+6. **M12 açık işler:** `devam/wip-m12-pvp-mouse-ve-uzak-sesler.patch` (PvP'de fareyle hedefleme, diğer oyuncuların dövüş sesleri) — uygula, `net.spec`'e test ekle. Tarayıcıda 15 bot + oyuncu performans ölçümü. Yeni client ile Docker'ı bir kez daha dene.
+7. **Son kapı:** sakin bir makinede tam `npm test` (soak dahil), `npm run test:server`, Docker + Nginx denemesi; `README.md` ve `docs/MILESTONES.md` son hali; push.
 
 ### Bilinen sorunlar / notlar
 
@@ -121,7 +126,9 @@ npm run server:test         # 127.0.0.1:8787, test kancaları açık
 
 Tek tıkla başlatıcılar (`BASLAT-Windows.bat`, `BASLAT-Mac.command`, `BASLAT-Linux.sh`) da çalışır; ayrıntılar `README.md` içinde.
 
-### 5.3 İstanbul kolunu geri yükle
+### 5.3 İstanbul kolunu geri yükle (arşiv bilgisi)
+
+C0–C10 entegrasyonu artık tamamlandı; bu komutlar temiz bir eski kopyayı geri yüklemek içindir. Mevcut dalda sıradaki iş C11’dir; WIP commit’i ayrı inceleyip doğrula.
 
 ```bash
 # bundle'daki kolu yerel bir branch olarak al
@@ -154,6 +161,26 @@ npm test                                  # hepsi (soak dahil ~30+ dk; tek baş�
 ```
 
 Paralel çalışacaksan her kopyada farklı port: `SKYTHREAD_DEV_PORT=5302 npx playwright test ... --workers=1`.
+
+### Tarayıcı kurulumu ve macOS test notu
+
+Bu makinede oyun/derleme/test araçları Node.js **26.11.1** ile çalıştı; Playwright tarayıcı kurulumu ise Node.js **24.19.0 LTS** ile tamamlandı. Node 26 ile indirme/arşiv açma adımında takılırsa, PATH üzerinde Node 24 LTS seçip proje kökünde şu komutu çalıştır:
+
+```bash
+node --version                                  # v24.19.0 ile doğrulandı
+node node_modules/playwright/cli.js install chromium --only-shell
+```
+
+Bu komut Chromium Headless Shell **141.0.7390.37** (Playwright build **1194**) ve FFmpeg build **1011** kurdu. `--only-shell` bu projenin headless testleri için yeterli; görünür tarayıcı gerekiyorsa normal `npx playwright install chromium` kullanılabilir.
+
+`playwright.config.ts`, macOS’ta ANGLE **Metal** kullanır; diğer platformlarda SwiftShader ayarı korunur. Apple M4 üzerinde zorunlu SwiftShader, readback sırasında Chromium GPU-stall uyarıları üretti. Metal denemesinde aynı İstanbul anchor sonuçları, `gl.getError() = 0` ve temiz konsol doğrulandı; testler uyarıları hâlâ hata sayar.
+
+Kullanıcı önizlemesi `5301` ve normal oyun sunucusu `8787` portlarında çalışırken ağ testlerini ayrı süreçlerde çalıştır; Vite proxy ile test sunucusunun portu aynı ortam değişkeninden gelmeli:
+
+```bash
+SKYTHREAD_DEV_PORT=5302 SKYTHREAD_SERVER_PORT=8797 npx playwright test tests/net.spec.ts --workers=1
+```
+
 
 ### 5.6 Claude Code ile devam
 

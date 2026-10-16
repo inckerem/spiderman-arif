@@ -20,7 +20,7 @@
   "dependencies": {
     "lil-gui": "0.21.0",
     "three": "0.186.1",
-    "ws": "8.18.3"
+    "ws": "8.22.0"
   },
   "devDependencies": {
     "@playwright/test": "1.56.1",

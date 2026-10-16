@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { Vector3 } from 'three';
 import { saveResult } from './helpers';
-import { generateCity } from '../src/world/cityGen';
+import { getMap } from '../src/maps/registry';
 import { buildCollisionWorld } from '../src/world/cityCollision';
 import { F_BUILDING } from '../src/physics/collision';
 import { findRespawnRoof } from '../src/physics/safeSpot';
@@ -21,8 +21,9 @@ const SEED = 1337;
 const root = resolve(process.cwd());
 
 function buildWorld(seed = SEED) {
-  const layout = generateCity(seed);
-  const world = buildCollisionWorld(layout);
+  const map = getMap('manhattan');
+  const layout = map.generate(seed);
+  const world = buildCollisionWorld(layout, map);
   return { layout, world };
 }
 
@@ -136,6 +137,8 @@ const ALLOWED = [
   /^src\/core\/(math|rng)\.ts$/,
   /^src\/physics\/[^/]+\.ts$/,
   /^src\/world\/(types|cityGen|cityCollision)\.ts$/,
+  // M13: the dependency-free map id list.
+  /^src\/maps\/ids\.ts$/,
 ];
 /** Allowed for type-only imports. */
 const ALLOWED_TYPES = [/^src\/player\/targeting\.ts$/];
@@ -245,7 +248,7 @@ test('combat: pure modules import nothing from DOM or rendering code @quick', ()
 
 
 const DT = CombatSim.DT;
-let W: { layout: ReturnType<typeof generateCity>; world: ReturnType<typeof buildCollisionWorld>; spawns: SpawnPoints } | null = null;
+let W: { layout: ReturnType<typeof buildWorld>['layout']; world: ReturnType<typeof buildCollisionWorld>; spawns: SpawnPoints } | null = null;
 function world() {
   if (!W) {
     const { layout, world } = buildWorld();

@@ -8,6 +8,7 @@ import { MODE_SWING, MODE_ZIP, type PlayerEvent } from './player/player';
 import type { Action } from './input/bindings';
 import { RooftopMoment } from './extras/rooftopMoment';
 import { tuning } from './config/tuning';
+import { DEFAULT_MAP, type MapId } from './maps/ids';
 import { TouchControls, detectTouchMode, type TouchButtonHandler } from './input/touch';
 import { CombatUi } from './combatUi';
 import { Online } from './net/online';
@@ -131,10 +132,10 @@ export class App {
     this.audio = new AudioEngine(`${import.meta.env.BASE_URL}audio/theme.mp3`);
   }
 
-  async boot(seed: number): Promise<void> {
+  async boot(seed: number, mapId: MapId = DEFAULT_MAP): Promise<void> {
     const ui = this.ui;
     this.seed = seed;
-    this.game = new Game({ seed, canvas: this.canvas, onProgress: (f, label) => ui.setLoading(f, label) });
+    this.game = new Game({ seed, mapId, canvas: this.canvas, onProgress: (f, label) => ui.setLoading(f, label) });
     const game = this.game;
     await game.init();
     ui.setLayout(game.layout);
@@ -159,7 +160,7 @@ export class App {
     game.start();
     // Invite link (?oda=CODE): straight to the lobby with the code filled in.
     const invite = new URLSearchParams(location.search).get('oda');
-    if (invite) this.online.openLobby(invite);
+    if (!this.online.resumePendingJoin() && invite) this.online.openLobby(invite);
     if (import.meta.env.DEV) (window as unknown as { __net: unknown }).__net = this.online.testApi();
   }
 
@@ -571,9 +572,12 @@ export class App {
     // Audio listener: the hero on screen (in the menu, the attract hero).
     const L = this.listener;
     const ap = this.state === 'menu' ? game.attract.player : pl;
-    const P = game.layout.park;
-    const dx = Math.max(P.minX - ap.pos.x, 0, ap.pos.x - P.maxX);
-    const dz = Math.max(P.minZ - ap.pos.z, 0, ap.pos.z - P.maxZ);
+    let parkDistance = Infinity;
+    for (const P of game.layout.parks ?? [game.layout.park]) {
+      const dx = Math.max(P.minX - ap.pos.x, 0, ap.pos.x - P.maxX);
+      const dz = Math.max(P.minZ - ap.pos.z, 0, ap.pos.z - P.maxZ);
+      parkDistance = Math.min(parkDistance, Math.hypot(dx, dz));
+    }
     this.waterTimer -= dt;
     if (this.waterTimer <= 0) {
       this.waterTimer = 0.3;
@@ -588,7 +592,7 @@ export class App {
     const ground = ap.groundBelow(ap.pos.x, ap.pos.y, ap.pos.z);
     L.speed = this.state === 'menu' ? 0 : ap.speed;
     L.altitude = Math.max(0, ap.pos.y - (ground > -1e6 ? ground : 0));
-    L.parkFactor = 1 - smoothstep(0, 90, Math.hypot(dx, dz));
+    L.parkFactor = 1 - smoothstep(0, 90, parkDistance);
     L.nightFactor = game.dayNight.night;
     L.waterFactor = this.waterFactor;
     L.swinging = ap.mode === MODE_SWING || ap.mode === MODE_ZIP;

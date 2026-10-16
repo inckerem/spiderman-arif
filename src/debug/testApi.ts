@@ -32,6 +32,12 @@ import {
   planTarget,
   type BotInput,
 } from './testDrivers';
+import { goldenDigest } from './golden';
+import { terrainSelfTest } from './terrainSelfTest';
+import { landmarkTunnelTest } from './landmarkTests';
+import { mapSwitchUrl } from '../maps/select';
+import { getMap } from '../maps/registry';
+import { buildCollisionWorld } from '../world/cityCollision';
 import { makeAnchorResult } from '../player/targeting';
 import { fillTickInput } from '../player/autopilot';
 import { ES_NAMES, type EnemyKind } from '../combat/types';
@@ -51,6 +57,7 @@ export function installTestApi(game: Game, app?: App): void {
   const api = {
     ready: true,
     game,
+    mapId: game.mapId,
     tuning,
     app,
     setManual(on: boolean): void {
@@ -193,6 +200,8 @@ export function installTestApi(game: Game, app?: App): void {
     ringTest: () => ringTest(game),
     soakMinute: (minute: number) => soakMinute(game, app, minute),
     tunnelTest: (trials = 300) => tunnelTest(game, trials),
+    /** 95 m/s impacts into landmark and bridge parts: minarets, towers, cable chains (M13). */
+    landmarkTunnelTest: (trials = 300) => landmarkTunnelTest(game, trials),
     lifeTest: () => lifeTest(game),
     /** Attract mode headless (dev-only hook; the real loop never runs it in manual mode). */
     attractTest: (seconds = 240, seed = 1) => attractTest(game, seconds, seed),
@@ -201,6 +210,24 @@ export function installTestApi(game: Game, app?: App): void {
     /** Frames of play with the held input (the app's per-frame update drives the rooftop moment). */
     momentFrames: (seconds: number, sample = 0) => (app ? momentFrames(game, app, held, prev, seconds, sample) : null),
     updateLife: (dt = 1 / 60) => game.updateLife(dt),
+    /** Hash of layout, colliders and deterministic driver outputs (M13 refactor gate). */
+    goldenDigest: (attractSeconds = 120) => goldenDigest(game, attractSeconds),
+    /** Heightfield terrain, water mask and road index checks (Istanbul data). */
+    terrainSelfTest: (rays = 20000, points = 100000) => terrainSelfTest(rays, points),
+    /** Times a fresh generation of this map (layout, terrain, colliders) in ms. */
+    timeGeneration(): Record<string, number> {
+      const map = getMap(game.mapId);
+      const t0 = performance.now();
+      const L = map.generate(game.layout.seed);
+      const t1 = performance.now();
+      const w = buildCollisionWorld(L, map);
+      const t2 = performance.now();
+      return { layoutMs: t1 - t0, collisionMs: t2 - t1, totalMs: t2 - t0, colliders: w.count, buildings: L.buildings.length };
+    },
+    /** What the traversal bots must reach on this map (minimum city distance, tree-only park). */
+    routeExpect: () => getMap(game.mapId).routes.expect,
+    /** The URL a map switch reloads to. */
+    mapUrl: (id: string) => mapSwitchUrl(location.href, id as Parameters<typeof mapSwitchUrl>[1]),
     /** Touch spec: a place to measure a control (the real-time loop keeps running). */
     touchSpot: (kind: 'avenue' | 'wall' | 'air') => touchSpot(game, kind),
     /** Points the crosshair at the best swing anchor in view; false when there is none. */

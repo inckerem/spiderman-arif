@@ -21,7 +21,8 @@ import { Input, emptyTickInput, type TickInput } from './input/input';
 import { CollisionWorld, F_CANOPY } from './physics/collision';
 import { Player, MODE_NAMES, MODE_ZIP, type PlayerEvent } from './player/player';
 import { CameraRig } from './camera/cameraRig';
-import { generateCity } from './world/cityGen';
+import { getMap } from './maps/registry';
+import { getMapVisuals } from './maps/renderRegistry';
 import { buildCollisionWorld } from './world/cityCollision';
 import type { CityLayout } from './world/types';
 import { DebugPanel } from './debug/debugPanel';
@@ -36,6 +37,7 @@ import { RingRaces } from './extras/rings';
 import { AttractMode } from './extras/attractMode';
 import { Rain } from './fx/rain';
 import { clearShot } from './camera/director';
+import type { MapId } from './maps/ids';
 import { CombatSim } from './combat/combatSim';
 import { buildSpawnPoints, type SpawnPoints } from './combat/spawnPoints';
 import { CombatView } from './combat/client/combatView';
@@ -50,6 +52,8 @@ import type { CombatEvent } from './combat/types';
 
 export interface GameOptions {
   seed: number;
+  /** Map to build (src/maps/ids.ts). */
+  mapId: MapId;
   canvas: HTMLCanvasElement;
   onProgress?: (fraction: number, label: string) => void;
 }
@@ -174,6 +178,11 @@ export class Game {
   /** Fixed camera pose for screenshots (tests/photo checks). */
   cameraOverride: { x: number; y: number; z: number; tx: number; ty: number; tz: number; fov: number } | null = null;
 
+  /** The map this game was built for (a map switch reloads the page). */
+  get mapId(): MapId {
+    return this.opts.mapId;
+  }
+
   constructor(private readonly opts: GameOptions) {
     stableShadowSampling();
     this.renderer = new WebGLRenderer({ canvas: opts.canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
@@ -199,11 +208,12 @@ export class Game {
     p(0.05, 'layout');
     await nextFrame();
     const t0 = performance.now();
-    this.layout = generateCity(this.opts.seed);
+    const map = getMap(this.opts.mapId);
+    this.layout = map.generate(this.opts.seed);
     const t1 = performance.now();
     p(0.35, 'collision');
     await nextFrame();
-    this.world = buildCollisionWorld(this.layout);
+    this.world = buildCollisionWorld(this.layout, map);
     const t2 = performance.now();
     console.info(
       `[skythread] city generated in ${(t1 - t0).toFixed(0)} ms, collision in ${(t2 - t1).toFixed(0)} ms: ` +
@@ -232,7 +242,7 @@ export class Game {
     this.link = new SwitchLink(this.combatLink);
     this.heroCombat = new HeroCombat(this.player, this.world, this.link);
     this.beacons = new EventBeacons();
-    this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
+    this.visuals = await buildCityVisuals(this.layout, getMapVisuals(this.layout.mapId), (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
     p(0.88, 'shaders');
     this.sky = new Sky(this.opts.seed);

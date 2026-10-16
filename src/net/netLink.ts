@@ -13,7 +13,7 @@ import { ENEMY_KIND_COUNT, HERO_ID_BASE, type CombatEvent, type CombatIntent, ty
 import type { CombatView } from '../combat/client/combatView';
 import { makeEnemySnap as makeViewSnap, makeSelfSnap, type CombatLink, type CombatSnapshot, type EnemySnap as ViewSnap } from '../combat/client/link';
 import { MODE_TRAVERSE, MODE_WALL, MODE_ZIP, type Player, type PlayerEvent } from '../player/player';
-import { ClockSync } from './clock';
+import { ClockSync, hoursPerSecond, wrapHour } from './clock';
 import { ByteWriter, decodeEnemySnapshot, decodeHeroStates, encodeHeroState, encodeMsg, parseServerMsg } from './codec';
 import type { MapId } from './maps';
 import {
@@ -38,13 +38,15 @@ import {
 import { makeEnemySnap as makeWireSnap, makeHeroCombatSnap, type DebugOp, type EnemySnap as WireSnap } from '../sim/types';
 
 export type NetStatus = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'closed';
-export type ConnectResult = { ok: true; room: RoomInfo } | { ok: false; why: RejectWhy | 'unreachable' };
+export type ConnectResult = { ok: true; room: RoomInfo; accepted: boolean } | { ok: false; why: RejectWhy | 'unreachable' };
 
 export interface NetLinkOptions {
   url: string;
   name: string;
   costume: string;
   map: MapId;
+  /** World already built on this page; every welcome, including reconnects, must match it. */
+  world: { map: MapId; seed: number };
   join: JoinRequest;
   /** Reconnect token of an earlier session (sessionStorage), tried first. */
   token?: string;
@@ -114,6 +116,8 @@ export class NetLink implements CombatLink {
   private helloAt = 0;
   /** The room's active crime events at the last welcome (`syncCrimes`). */
   private welcomeEvents: CrimeEventInfo[] = [];
+  /** Last accepted room clock, retained until the online controller attaches its callbacks. */
+  private roomClock: { hour: number; dayLen: number; at: number } | null = null;
   // Snapshot conversion buffers.
   private readonly wire: WireSnap[] = [];
   private readonly viewSnaps: ViewSnap[] = [];
@@ -191,6 +195,7 @@ export class NetLink implements CombatLink {
   private open(timeoutMs: number): Promise<ConnectResult> {
     return new Promise((resolve) => {
       let done = false;
+      let accepted = false;
       const finish = (r: ConnectResult): void => {
         if (done) return;
         done = true;
@@ -231,14 +236,15 @@ export class NetLink implements CombatLink {
           const m = parseServerMsg(data);
           if (!m) return;
           if (m.t === 'welcome') {
-            this.onWelcomeMsg(m);
-            finish({ ok: true, room: m.room });
+            accepted = m.room.map === this.opts.world.map && m.room.seed === this.opts.world.seed;
+            if (accepted) this.onWelcomeMsg(m);
+            finish({ ok: true, room: m.room, accepted });
           } else if (m.t === 'reject') {
             finish({ ok: false, why: m.why });
-          } else this.onText(m);
+          } else if (accepted) this.onText(m);
         } else {
           this.bytesIn += data.byteLength;
-          this.onBinary(new Uint8Array(data));
+          if (accepted) this.onBinary(new Uint8Array(data));
         }
       };
     });
@@ -258,13 +264,26 @@ export class NetLink implements CombatLink {
     for (const p of m.players) this.players.set(p.pid, p);
     this.welcomeEvents = m.events;
     this.syncCrimes();
-    this.onClock?.(m.clock.hour, m.clock.dayLen);
+    this.noteClock(m.clock.hour, m.clock.dayLen);
     this.attempt = 0;
     this.clearTimers();
     this.pingTimer = setInterval(() => this.send({ t: 'ping', c: this.now_() }), PING_MS);
     this.setStatus('online');
     this.onWelcome?.(resumed);
     this.upload();
+  }
+
+  private noteClock(hour: number, dayLen: number): void {
+    this.roomClock = { hour, dayLen, at: this.now_() };
+    this.onClock?.(hour, dayLen);
+  }
+
+  /** Replay the latest accepted clock after a caller attaches its listeners. */
+  syncClock(): void {
+    const clock = this.roomClock;
+    if (!clock) return;
+    const hour = wrapHour(clock.hour + ((this.now_() - clock.at) / 1000) * hoursPerSecond(clock.dayLen));
+    this.onClock?.(hour, clock.dayLen);
   }
 
   /**
@@ -302,8 +321,8 @@ export class NetLink implements CombatLink {
     this.retryTimer = setTimeout(() => {
       void this.open(4000).then((r) => {
         if (this.closedByUs) return;
-        if (!r.ok) {
-          if (r.why === 'unreachable') this.lost();
+        if (!r.ok || !r.accepted) {
+          if (!r.ok && r.why === 'unreachable') this.lost();
           else {
             this.setStatus('closed');
             this.onKick?.('timeout');
@@ -363,7 +382,7 @@ export class NetLink implements CombatLink {
         this.onLeft?.(m.pid, m.why);
         break;
       case 'clock':
-        this.onClock?.(m.hour, m.dayLen);
+        this.noteClock(m.hour, m.dayLen);
         break;
       case 'pong':
         this.clock.onPong(m.c, m.s, this.now_());

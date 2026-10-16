@@ -1,5 +1,8 @@
 import { App } from './app';
 import { tr } from './i18n/tr';
+import { resolveMapId } from './maps/select';
+import { getMap } from './maps/registry';
+import { loadSettings } from './ui/settings';
 
 function fatal(message: string): void {
   const el = document.createElement('div');
@@ -26,10 +29,11 @@ async function boot(): Promise<void> {
     fatal(tr.warnings.noWebGL);
     return;
   }
+  const mapId = resolveMapId(location.search, loadSettings().map);
   const seedParam = new URLSearchParams(location.search).get('seed');
-  const seed = seedParam ? Number(seedParam) | 0 : 1337;
+  const seed = seedParam ? Number(seedParam) | 0 : getMap(mapId).defaultSeed;
   const app = new App(canvas, uiRoot);
-  await app.boot(seed);
+  await app.boot(seed, mapId);
   // Load-time marker (read by the performance check; harmless in play).
   document.body.dataset.ready = String(Math.round(performance.now()));
   if (import.meta.env.DEV) {

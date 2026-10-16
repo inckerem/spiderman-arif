@@ -22,6 +22,7 @@ import {
 } from '../input/bindings';
 import { keyLabel, learnKey, loadKeyboardLayout, primaryLabel, slotLabels } from './keyLabels';
 import { COSTUME_IDS, slotCss, type CostumeId } from '../character/costumes';
+import { buildMapScreen } from './mapScreen';
 import {
   clamp,
   el,
@@ -82,8 +83,8 @@ export interface PhotoOptions {
   onExit: () => void;
 }
 
-type MenuScreen = 'main' | 'pause' | 'controls' | 'settings' | 'bindings' | 'costume' | 'lobby';
-type SubScreen = 'controls' | 'settings' | 'bindings' | 'costume';
+type MenuScreen = 'main' | 'pause' | 'controls' | 'settings' | 'bindings' | 'costume' | 'maps' | 'lobby';
+type SubScreen = 'controls' | 'settings' | 'bindings' | 'costume' | 'maps';
 type UiSound = 'click' | 'hover';
 type ControlRowId = (typeof tr.controls.rows)[number][0];
 
@@ -103,7 +104,7 @@ interface SliderSpec {
   format: (v: number) => string;
 }
 
-const SCREEN_NAMES: readonly MenuScreen[] = ['main', 'pause', 'controls', 'settings', 'bindings', 'costume', 'lobby'];
+const SCREEN_NAMES: readonly MenuScreen[] = ['main', 'pause', 'controls', 'settings', 'bindings', 'costume', 'maps', 'lobby'];
 /** Movement keys in the order players read them ("W A S D"). */
 const MOVE_ACTIONS: readonly Action[] = ['forward', 'left', 'back', 'right'];
 /** Controls-screen rows whose keys come from the bindings; the others use tr.controls.fixedKeys. */
@@ -376,6 +377,7 @@ export class UI {
       costume: this.buildCostume(),
       // Filled by the multiplayer lobby (src/ui/lobby.ts).
       lobby: el('div', 'sk-screen sk-screen-sub sk-screen-lobby'),
+      maps: buildMapScreen({ settings: this.settings, title: (t) => this.panelTitle(t), back: () => this.backButton(), sound: (k) => this.sound(k), save: () => this.commitSettings() }),
     };
     this.menuLayer = el('div', 'sk-menu-layer');
     for (const name of SCREEN_NAMES) this.menuLayer.append(this.screens[name]);
@@ -848,6 +850,7 @@ export class UI {
       this.button(tr.menu.play, 'is-primary is-big', () => this.runWithDefault(this.onPlay, () => this.hideMenus())),
       this.button(tr.net.lobby.open, 'sk-btn-mp', () => this.onMultiplayer()),
       this.button(tr.menu.costume, '', (b) => this.openSub('costume', b)),
+      this.button(tr.maps.menu, '', (b) => this.openSub('maps', b)),
       this.button(tr.menu.controls, '', (b) => this.openSub('controls', b)),
       this.button(tr.menu.settings, '', (b) => this.openSub('settings', b)),
     );
@@ -1117,7 +1120,7 @@ export class UI {
 
   /** Resets this screen's settings; key bindings and the costume have their own screens. */
   private resetSettings(): void {
-    Object.assign(this.settings, this.defaults, { bindings: this.settings.bindings, costume: this.settings.costume });
+    Object.assign(this.settings, this.defaults, { bindings: this.settings.bindings, costume: this.settings.costume, map: this.settings.map });
     this.syncSettings();
     this.commitSettings();
   }

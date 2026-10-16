@@ -1,5 +1,5 @@
 import type { Vector3 } from 'three';
-import type { Terrain } from './terrain';
+import { makeTerrainHit, type TerrainModel } from './terrain';
 
 // Collider kinds
 export const BOX = 0;
@@ -122,9 +122,10 @@ export class CollisionWorld {
   private stamp: Uint32Array = new Uint32Array(1);
   private stampValue = 1;
   readonly queryBuf = new Int32Array(8192);
+  private readonly terrainHit = makeTerrainHit();
 
   constructor(
-    readonly terrain: Terrain,
+    readonly terrain: TerrainModel,
     readonly minX: number,
     readonly minZ: number,
     readonly maxX: number,
@@ -1046,30 +1047,15 @@ export class CollisionWorld {
         }
       }
     }
-    // Terrain / water plane
-    if (withTerrain && dy < -1e-9) {
-      const tl = this.terrain;
-      // Try the land plane first, then water level at the hit location.
-      const tg = (tl.roadHeight + inflate - oy) / dy;
-      if (tg >= 0 && tg < best) {
-        const hx = ox + dx * tg,
-          hz = oz + dz * tg;
-        if (!tl.isWater(hx, hz)) {
-          best = tg;
-          bestId = -1;
-          bnx = 0;
-          bny = 1;
-          bnz = 0;
-        } else {
-          const tw = (tl.waterLevelAt(hx, hz) + inflate - oy) / dy;
-          if (tw >= 0 && tw < best) {
-            best = tw;
-            bestId = -2;
-            bnx = 0;
-            bny = 1;
-            bnz = 0;
-          }
-        }
+    // Terrain / water surface
+    if (withTerrain) {
+      const th = this.terrainHit;
+      if (this.terrain.rayIntersect(ox, oy, oz, dx, dy, dz, best, inflate, th)) {
+        best = th.t;
+        bestId = th.water ? -2 : -1;
+        bnx = th.nx;
+        bny = th.ny;
+        bnz = th.nz;
       }
     }
     if (bestId === -3) return false;

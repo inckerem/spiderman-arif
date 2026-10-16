@@ -1164,7 +1164,7 @@ test('static paths cannot escape the root', () => {
 // Purity of the shared modules (they run in the browser, in Node and in LocalLink)
 
 test('shared net/sim modules import only pure code and no DOM or Node APIs', () => {
-  const allowed = [/^three$/, /^src\/combat\/(?!render\/|client\/)[a-zA-Z/]+\.ts$/, /^src\/config\/tuning\.ts$/, /^src\/core\/(math|rng)\.ts$/, /^src\/physics\/[a-zA-Z]+\.ts$/, /^src\/world\/(types|cityGen|cityCollision)\.ts$/, /^src\/net\/(protocol|codec|names|maps|clock|interp)\.ts$/, /^src\/sim\/[a-zA-Z]+\.ts$/];
+  const allowed = [/^three$/, /^src\/combat\/(?!render\/|client\/)[a-zA-Z/]+\.ts$/, /^src\/config\/tuning\.ts$/, /^src\/core\/(math|rng)\.ts$/, /^src\/physics\/[a-zA-Z]+\.ts$/, /^src\/world\/(types|cityGen|cityCollision)\.ts$/, /^src\/maps\/ids\.ts$/, /^src\/net\/(protocol|codec|names|maps|clock|interp)\.ts$/, /^src\/sim\/[a-zA-Z]+\.ts$/];
   const roots = ['protocol', 'codec', 'names', 'maps', 'clock', 'interp'].map((n) => `src/net/${n}.ts`).concat(fs.readdirSync(path.join(ROOT, 'src/sim')).map((f) => `src/sim/${f}`));
   const seen = new Set<string>();
   const queue = [...roots];
