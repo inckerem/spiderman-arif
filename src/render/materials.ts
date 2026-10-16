@@ -277,8 +277,19 @@ export function glowMaterial(map: Texture | null, color: number, key: string): M
   return withMRT(m, false, key);
 }
 
-/** Stylised cel water with ripple bands, a hard sun glint and shore foam. */
-export function waterMaterial(land: Vector4, islet: Vector4): ShaderMaterial {
+/**
+ * Signed-distance shore for maps with arbitrary coastlines (M13): a texture of
+ * the distance to land over the water (red channel, metres / 16) covering
+ * `extent` (minX, minZ, maxX, maxZ), plus a colour tint for the map's water.
+ */
+export interface ShoreSdf {
+  texture: Texture;
+  extent: Vector4;
+  tint: Color;
+}
+
+/** Stylised cel water with ripple bands, a hard sun glint and shore foam (around rectangles, or along a shore SDF). */
+export function waterMaterial(land: Vector4, islet: Vector4, shore?: ShoreSdf): ShaderMaterial {
   const uniforms = UniformsUtils.merge([
     UniformsLib.fog,
     {
@@ -297,8 +308,14 @@ export function waterMaterial(land: Vector4, islet: Vector4): ShaderMaterial {
   // Keep shared uniform identity (merge clones them).
   uniforms.uTime = shared.uTime;
   uniforms.uNight = shared.uNight;
+  if (shore) {
+    uniforms.uShoreSdf = { value: shore.texture };
+    uniforms.uShoreExtent = { value: shore.extent };
+    uniforms.uWaterTint = { value: shore.tint };
+  }
   return new ShaderMaterial({
     uniforms,
+    defines: shore ? { SHORE_SDF: '' } : {},
     fog: true,
     vertexShader: /* glsl */ `
       #include <common>
@@ -325,6 +342,11 @@ export function waterMaterial(land: Vector4, islet: Vector4): ShaderMaterial {
       uniform vec4 uLand;
       uniform vec4 uIslet;
       uniform vec4 uPondCenter;
+      #ifdef SHORE_SDF
+      uniform sampler2D uShoreSdf;
+      uniform vec4 uShoreExtent;
+      uniform vec3 uWaterTint;
+      #endif
       varying vec3 vWorld;
       float rectDist(vec2 p, vec4 r) {
         vec2 d = max(r.xy - p, p - r.zw);
@@ -349,8 +371,14 @@ export function waterMaterial(land: Vector4, islet: Vector4): ShaderMaterial {
         vec3 R = reflect(-V, N);
         float s = dot(R, normalize(uSunDir));
         col += step(0.992, s) * uSunColor * 1.2 * smoothstep(-0.05, 0.1, uSunDir.y + 0.1);
-        // Shore foam around the island, islet and pond edge
+        // Shore foam around the island, islet and pond edge (or along the coast's distance field)
+        #ifdef SHORE_SDF
+        col *= uWaterTint;
+        vec2 suv = (p - uShoreExtent.xy) / (uShoreExtent.zw - uShoreExtent.xy);
+        float dLand = texture2D(uShoreSdf, clamp(suv, 0.0, 1.0)).r * 16.0;
+        #else
         float dLand = min(rectDist(p, uLand), rectDist(p, uIslet));
+        #endif
         float foam = 1.0 - smoothstep(0.0, 2.6 + 1.2 * sin(p.x * 0.31 + p.y * 0.27 + t * 1.7), dLand);
         if (uPondCenter.w > 0.0) {
           vec2 q = (p - uPondCenter.xy) / uPondCenter.zw;

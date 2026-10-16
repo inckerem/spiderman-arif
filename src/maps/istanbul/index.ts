@@ -1,7 +1,7 @@
 import type { Rng } from '../../core/rng';
 import type { TerrainModel } from '../../physics/terrain';
 import type { CityLayout } from '../../world/types';
-import { WP_PARK, WP_ROOF, WP_WATERFRONT, type MapDefinition, type Waypoint, type XZ } from '../types';
+import { WP_PARK, WP_ROOF, WP_WATERFRONT, type MapDefinition, type RingRouteSpec, type Waypoint, type XZ } from '../types';
 import { IST_EXTENT, PENINSULA, EUROPE_N, ASIA } from './data';
 import { generateIstanbul, istanbulParts, istanbulTerrain } from './gen';
 import { istanbulRoute } from './autoroute';
@@ -75,6 +75,32 @@ function route(L: CityLayout, ax: number, az: number, bx: number, bz: number, _v
   return istanbulRoute(L, ax, az, bx, bz, out);
 }
 
+/**
+ * Ring routes (ids carry `ist-` so stored best times never mix with
+ * Manhattan's): a slalom through the Hagia Sophia and Blue Mosque minarets,
+ * Galata Tower over the Galata Bridge to Yeni Cami, and up the Bosphorus
+ * shore from Dolmabahçe under the 15 Temmuz deck. Heights are above the
+ * ground there; the ring placer finds a clear disc near each point.
+ */
+function ringRoutes(L: CityLayout): RingRouteSpec[] {
+  const t = istanbulTerrain(L);
+  const up = (x: number, h: number, z: number): [number, number, number] => [x, Math.max(t.baseHeight(x, z), 0) + h, z];
+  return [
+    {
+      id: 'ist-minare',
+      pts: [up(60, 32, 266), up(8, 38, 316), up(60, 42, 368), up(110, 36, 420), up(60, 40, 470), up(10, 34, 520), up(60, 45, 575)],
+    },
+    {
+      id: 'ist-halic',
+      pts: [up(40, 32, -215), up(60, 22, -150), up(28, 9, -60), up(30, 9, 0), up(28, 9, 60), up(-88, 14, 150)],
+    },
+    {
+      id: 'ist-bogaz',
+      pts: [up(360, 14, -455), up(388, 22, -540), up(405, 22, -600), up(418, 20, -630), up(470, 38, -700), up(540, 44, -740), up(650, 46, -740)],
+    },
+  ];
+}
+
 export const ISTANBUL: MapDefinition = {
   id: 'istanbul',
   defaultSeed: 1337,
@@ -137,5 +163,5 @@ export const ISTANBUL: MapDefinition = {
   },
   // The attract hero keeps to the landmass it stands on: open water has nothing to swing from.
   autopilot: { waypoints, route, goalOk: (_L, ax, az, bx, bz) => landmass(ax, az) === landmass(bx, bz) },
-  ringRoutes: () => [],
+  ringRoutes,
 };

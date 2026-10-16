@@ -156,8 +156,11 @@ function slab(g: GeomBuilder, t: HeightfieldTerrain, r: Rect, top: [number, numb
     }
   }
   const row = nx + 1;
+  // Quads over the water are left out (a park rectangle may reach past the shore).
+  const wet = (i: number, j: number): boolean => t.isWater(r.minX + (w * i) / nx, r.minZ + (dd * j) / nz);
   for (let j = 0; j < nz; j++) {
     for (let i = 0; i < nx; i++) {
+      if (wet(i, j) || wet(i + 1, j) || wet(i, j + 1) || wet(i + 1, j + 1)) continue;
       const a = base + (j + 1) * row + i,
         b = base + (j + 1) * row + i + 1,
         c = base + j * row + i + 1,
@@ -174,6 +177,7 @@ function slab(g: GeomBuilder, t: HeightfieldTerrain, r: Rect, top: [number, numb
         p0z = az + ((bz - az) * s) / steps;
       const p1x = ax + ((bx - ax) * (s + 1)) / steps,
         p1z = az + ((bz - az) * (s + 1)) / steps;
+      if (t.isWater(p0x, p0z) || t.isWater(p1x, p1z)) continue;
       const y0 = t.baseHeight(p0x, p0z),
         y1 = t.baseHeight(p1x, p1z);
       g.quad(p0x, y0 - 0.05, p0z, p1x, y1 - 0.05, p1z, p1x, y1 + CURB, p1z, p0x, y0 + CURB, p0z, nxx, 0, nzz);
