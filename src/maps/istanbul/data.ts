@@ -166,6 +166,8 @@ export interface ParkSite {
 
 export const PARKS: ParkSite[] = [
   { name: 'Gülhane', rect: { minX: 130, maxX: 320, minZ: 115, maxZ: 205 }, spacing: [10, 15] },
+  // Sarayburnu Park on the tip, south of Gülhane up to Topkapı's wall (§2.6 "plus the shore strip around the tip").
+  { name: 'Sarayburnu', rect: { minX: 266, maxX: 332, minZ: 205, maxZ: 262 }, spacing: [10, 14] },
   { name: 'Sultanahmet', rect: { minX: 10, maxX: 130, minZ: 380, maxZ: 418 }, spacing: [11, 16] },
   { name: 'Gezi', rect: { minX: 100, maxX: 190, minZ: -680, maxZ: -620 }, spacing: [9, 13] },
   { name: 'Yıldız', rect: { minX: 230, maxX: 390, minZ: -700, maxZ: -612 }, spacing: [9, 13] },

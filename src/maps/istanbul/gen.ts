@@ -8,12 +8,21 @@ import {
   D_DOWNTOWN,
   D_LOW,
   D_MID,
+  HIP_PITCH,
+  HIP_STEP_H,
+  LOOK_APARTMENT,
+  LOOK_GLASS,
+  LOOK_STONE,
+  LOOK_WOODEN,
   PROP_HVAC,
-  PROP_TANK,
+  PROP_ROOF_TANK,
+  PROP_SOLAR,
+  PROP_WALL_SIGN,
   SP_LAMP,
-  TREE_MAPLE,
+  TREE_CYPRESS,
   TREE_OAK,
-  TREE_POPLAR,
+  TREE_PLANE,
+  TREE_STONEPINE,
   type Block,
   type BoxSpec,
   type BridgeSpec,
@@ -57,12 +66,23 @@ const SHOP_FLOOR = 4.0;
 type RGB = [number, number, number];
 const hex = (h: number): RGB => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
 
-/** §2.6 palette: walls, trims, glass. */
-const WALLS = [0xefe3c8, 0xd9a65b, 0xd49a8a, 0xb8613e, 0xa9c7b0, 0xc9c6be, 0xe2c99a, 0xe8cf7a, 0xf2efe6, 0x9eb9c9];
-const TRIMS = [0xf2efe6, 0x7a5236, 0xe7e0d0, 0x8d9499];
+/**
+ * §2.6 palette per look: cream EFE3C8, ochre D9A65B, dusty rose D49A8A,
+ * terracotta B8613E, mint A9C7B0, warm grey C9C6BE, sand E2C99A, mustard
+ * E8CF7A, chalk F2EFE6, pastel blue 9EB9C9; timber 7A5236; stone E7E0D0.
+ */
+const WOOD_WALLS = [0xd49a8a, 0xa9c7b0, 0xd9a65b, 0xefe3c8, 0x9eb9c9, 0x9a6a48, 0xe8cf7a, 0xb8613e, 0xd49a8a, 0xa9c7b0];
+const APT_WALLS = [0xefe3c8, 0xe2c99a, 0xf2efe6, 0xc9c6be, 0xd49a8a, 0xd9a65b, 0x9eb9c9, 0xe8cf7a, 0xb8613e];
+const STONE_WALLS = [0xc9c6be, 0xe2c99a, 0xe7e0d0, 0xd8c3a0, 0xcdbb9c, 0xb9ab95];
+const TRIMS = [0xf2efe6, 0xe7e0d0, 0xefe3c8];
+const WOOD_TRIMS = [0xf2efe6, 0x7a5236, 0xefe3c8];
 const GLASS = [0x4a6f88, 0x3f6278, 0x557f99];
 const TOWER_WALLS = [0x8aa7b8, 0x5a7d95, 0xc9c1ad, 0x3d6f8f, 0xd8cfb8];
+/** Clay roof tiles. */
+const TILES = [0xb24a2e, 0xa8432a, 0xc0603a];
 
+/** Gap between two rectangles (0 when they touch or overlap). */
+const rectGap = (a: Rect, b: Rect): number => Math.hypot(Math.max(0, a.minX - b.maxX, b.minX - a.maxX), Math.max(0, a.minZ - b.maxZ, b.minZ - a.maxZ));
 const grow = (r: Rect, d: number): Rect => ({ minX: r.minX - d, maxX: r.maxX + d, minZ: r.minZ - d, maxZ: r.maxZ + d });
 const inRect = (r: Rect, x: number, z: number, m = 0): boolean => x > r.minX - m && x < r.maxX + m && z > r.minZ - m && z < r.maxZ + m;
 
@@ -71,21 +91,39 @@ interface DistrictSpec {
   name: string;
   floors: [number, number];
   district: District;
+  /** Looks with weights (LOOK_*). */
+  looks: Array<[number, number]>;
+  /** Chance of a hip tile roof (small lots only), and of cumba bays on a street face. */
+  hip: number;
+  bay: number;
+  /** Lit window share at night. */
+  lit: [number, number];
 }
 
 function districtAt(x: number, z: number): DistrictSpec {
-  if (inRect(LEVENT, x, z)) return { name: 'levent', floors: [36, 70], district: D_DOWNTOWN };
-  if (x > 600) return { name: 'uskudar', floors: [3, 7], district: D_LOW };
+  if (inRect(LEVENT, x, z)) return { name: 'levent', floors: [36, 70], district: D_DOWNTOWN, looks: [[LOOK_GLASS, 1]], hip: 0, bay: 0, lit: [0.45, 0.75] };
+  if (x > 600) return { name: 'uskudar', floors: [3, 7], district: D_LOW, looks: [[LOOK_WOODEN, 0.6], [LOOK_APARTMENT, 0.4]], hip: 0.8, bay: 0.5, lit: [0.35, 0.6] };
   if (z > -60) {
     // Historic peninsula.
-    if (x > -60 && z > 230) return { name: 'sultanahmet', floors: [2, 5], district: D_LOW };
-    if (x > -250 && z < 250) return { name: 'eminonu', floors: [4, 7], district: D_LOW };
-    return { name: 'fatih', floors: [3, 6], district: D_LOW };
+    if (x > -60 && z > 230) return { name: 'sultanahmet', floors: [2, 5], district: D_LOW, looks: [[LOOK_WOODEN, 0.75], [LOOK_STONE, 0.25]], hip: 0.85, bay: 0.6, lit: [0.4, 0.65] };
+    if (x > -250 && z < 250) return { name: 'eminonu', floors: [4, 7], district: D_LOW, looks: [[LOOK_STONE, 0.7], [LOOK_APARTMENT, 0.3]], hip: 0.45, bay: 0.1, lit: [0.25, 0.5] };
+    return { name: 'fatih', floors: [3, 6], district: D_LOW, looks: [[LOOK_WOODEN, 0.5], [LOOK_APARTMENT, 0.5]], hip: 0.7, bay: 0.45, lit: [0.35, 0.6] };
   }
-  if (z > -350 && x > -100) return { name: 'galata', floors: [6, 8], district: D_LOW };
-  if (x < -150) return { name: 'kasimpasa', floors: [4, 7], district: D_LOW };
-  if (z > -560) return { name: 'beyoglu', floors: [5, 8], district: D_LOW };
-  return { name: 'taksim', floors: [6, 10], district: D_MID };
+  if (z > -350 && x > -100) return { name: 'galata', floors: [6, 8], district: D_LOW, looks: [[LOOK_STONE, 0.65], [LOOK_APARTMENT, 0.35]], hip: 0.3, bay: 0.15, lit: [0.35, 0.6] };
+  if (x < -150) return { name: 'kasimpasa', floors: [4, 7], district: D_LOW, looks: [[LOOK_APARTMENT, 0.8], [LOOK_WOODEN, 0.2]], hip: 0.5, bay: 0.2, lit: [0.4, 0.7] };
+  if (z > -560) return { name: 'beyoglu', floors: [5, 8], district: D_LOW, looks: [[LOOK_APARTMENT, 0.85], [LOOK_STONE, 0.15]], hip: 0.45, bay: 0.4, lit: [0.45, 0.75] };
+  return { name: 'taksim', floors: [6, 10], district: D_MID, looks: [[LOOK_APARTMENT, 0.8], [LOOK_STONE, 0.2]], hip: 0.3, bay: 0.2, lit: [0.45, 0.75] };
+}
+
+function pickLook(rng: Rng, d: DistrictSpec): number {
+  let total = 0;
+  for (const [, w] of d.looks) total += w;
+  let r = rng.float() * total;
+  for (const [look, w] of d.looks) {
+    r -= w;
+    if (r <= 0) return look;
+  }
+  return d.looks[0]![0];
 }
 
 /** Per-layout terrain (generation builds it once; rebuilt from the layout data when missing). */
@@ -130,22 +168,100 @@ function makeTerrain(L: CityLayout, grid: ReturnType<typeof bakeIstanbulHeights>
   return new HeightfieldTerrain(grid, mask, roads, L.parks ?? [], raised);
 }
 
-/** A plain greybox facade style from the Istanbul palette. */
-function makeStyle(rng: Rng, district: District, shop: boolean): FacadeStyle {
-  const tower = district === D_DOWNTOWN;
-  const window = tower ? rng.pick([0, 5, 6]) : rng.pick([1, 2, 3, 1]);
-  return {
-    window,
-    floorHeight: tower ? rng.range(3.8, 4.1) : FLOOR,
-    bayWidth: tower ? rng.range(2.6, 3.2) : rng.range(2.8, 3.6),
-    wall: hex(tower ? rng.pick(TOWER_WALLS) : rng.pick(WALLS)),
-    trim: hex(rng.pick(TRIMS)),
-    glass: hex(rng.pick(GLASS)),
-    storefront: shop && !tower ? SHOP_FLOOR : 0,
-    litRatio: rng.range(0.3, 0.7),
-    pilasters: !tower && rng.chance(0.3),
-  };
+/**
+ * Facade style of a look (Istanbul window atlas, render/textures.ts):
+ * 0 glass curtain wall, 1 wooden sash with shutters, 2 tall 19th-century
+ * window with a pediment, 3 arched stone window, 4 warehouse grid,
+ * 6 modern apartment window, 7 shop front (5 is the roof tile pattern).
+ */
+function makeStyle(rng: Rng, d: DistrictSpec, look: number, shop: boolean): FacadeStyle {
+  const lit = rng.range(d.lit[0], d.lit[1]);
+  switch (look) {
+    case LOOK_GLASS:
+      return {
+        window: 0,
+        floorHeight: rng.range(3.8, 4.1),
+        bayWidth: rng.range(2.6, 3.2),
+        wall: hex(rng.pick(TOWER_WALLS)),
+        trim: hex(rng.pick([0xc9c6be, 0xd8d6d0, 0x8d9499])),
+        glass: hex(rng.pick([0x3d6f8f, 0x4a7f9a, 0x2f5f7a, 0x6d8fa3])),
+        storefront: 0,
+        litRatio: lit,
+        pilasters: false,
+        look,
+      };
+    case LOOK_WOODEN:
+      return {
+        window: 1,
+        floorHeight: FLOOR,
+        bayWidth: rng.range(2.2, 2.8),
+        wall: hex(rng.pick(WOOD_WALLS)),
+        trim: hex(rng.pick(WOOD_TRIMS)),
+        glass: hex(0x34505f),
+        storefront: shop ? SHOP_FLOOR : 0,
+        litRatio: lit,
+        pilasters: false,
+        look,
+      };
+    case LOOK_STONE:
+      return {
+        window: rng.chance(0.6) ? 3 : 4,
+        floorHeight: FLOOR,
+        bayWidth: rng.range(3.0, 3.8),
+        wall: hex(rng.pick(STONE_WALLS)),
+        trim: hex(rng.pick([0xe7e0d0, 0xd8cfb8, 0xf2efe6])),
+        glass: hex(rng.pick(GLASS)),
+        storefront: shop ? SHOP_FLOOR : 0,
+        litRatio: lit * 0.8,
+        pilasters: rng.chance(0.45),
+        look,
+      };
+    default: {
+      const modern = d.name === 'kasimpasa' || d.name === 'taksim' ? 0.45 : 0.15;
+      return {
+        window: rng.chance(modern) ? 6 : 2,
+        floorHeight: FLOOR,
+        bayWidth: rng.range(2.6, 3.2),
+        wall: hex(rng.pick(APT_WALLS)),
+        trim: hex(rng.pick(TRIMS)),
+        glass: hex(rng.pick(GLASS)),
+        storefront: shop ? SHOP_FLOOR : 0,
+        litRatio: lit,
+        pilasters: rng.chance(0.4),
+        look: LOOK_APARTMENT,
+      };
+    }
+  }
 }
+
+/**
+ * Hip roof colliders over a volume: boxes HIP_STEP_H tall, each inset by
+ * HIP_STEP_H / HIP_PITCH (1.5 m) from the one below, so the tile planes
+ * (rising from HIP_LIFT above the wall top) pass through the middle of every
+ * step and stay within 0.3 m of it. Building and camera flags only: a roof
+ * ledge is never a swing anchor.
+ */
+function hipRoofSteps(v: Volume): BoxSpec[] {
+  const out: BoxSpec[] = [];
+  const run = HIP_STEP_H / HIP_PITCH;
+  const half = Math.min(v.maxX - v.minX, v.maxZ - v.minZ) / 2;
+  for (let k = 0; k * run < half - 0.05; k++) {
+    const i = k * run;
+    out.push({ minX: v.minX + i, maxX: v.maxX - i, minY: v.maxY + k * HIP_STEP_H, maxY: v.maxY + (k + 1) * HIP_STEP_H, minZ: v.minZ + i, maxZ: v.maxZ - i });
+  }
+  return out;
+}
+
+/** Wall point and outward axis of a lot face (0 +X, 1 -X, 2 +Z, 3 -Z): centre, length, and the axis the face runs along. */
+function faceGeom(r: Rect, face: number): { x: number; z: number; len: number; alongX: boolean } {
+  if (face === 0) return { x: r.maxX, z: (r.minZ + r.maxZ) / 2, len: r.maxZ - r.minZ, alongX: false };
+  if (face === 1) return { x: r.minX, z: (r.minZ + r.maxZ) / 2, len: r.maxZ - r.minZ, alongX: false };
+  if (face === 2) return { x: (r.minX + r.maxX) / 2, z: r.maxZ, len: r.maxX - r.minX, alongX: true };
+  return { x: (r.minX + r.maxX) / 2, z: r.minZ, len: r.maxX - r.minX, alongX: true };
+}
+
+/** Cumba depth (m): bays project this far over the sidewalk. */
+const BAY_DEPTH = 0.8;
 
 interface Ctx {
   rng: Rng;
@@ -184,7 +300,7 @@ function footprintRange(ctx: Ctx, r: Rect): [number, number] {
 }
 
 /** A plain box building (or a Levent tower with setbacks) on a stone plinth that levels the slope. */
-function addBuilding(ctx: Ctx, fp: Rect, floors: number, d: DistrictSpec, faces: number[]): Building | null {
+function addBuilding(ctx: Ctx, fp: Rect, floors: number, d: DistrictSpec, faces: number[], han = false): Building | null {
   const rng = ctx.rng;
   const w = fp.maxX - fp.minX,
     dd = fp.maxZ - fp.minZ;
@@ -193,7 +309,9 @@ function addBuilding(ctx: Ctx, fp: Rect, floors: number, d: DistrictSpec, faces:
   const baseY = hi + CURB;
   const tower = d.district === D_DOWNTOWN;
   const shop = !tower && faces.length > 0 && rng.chance(0.6);
-  const style = makeStyle(rng, d.district, shop);
+  // Hans and hotels at the corners are stone; everything else takes the district's looks.
+  const look = han ? LOOK_STONE : pickLook(rng, d);
+  const style = makeStyle(rng, d, look, shop);
   const volumes: Volume[] = [];
   let H: number;
   if (tower) {
@@ -225,29 +343,51 @@ function addBuilding(ctx: Ctx, fp: Rect, floors: number, d: DistrictSpec, faces:
     volumes.push({ ...fp, minY: baseY, maxY: H, role: 1 });
   }
   const topV = volumes[volumes.length - 1]!;
+  // Small lots get a hip roof of clay tiles (no parapets or roof props); larger ones a flat terrace.
+  const hip = !tower && !han && w * dd < 400 && Math.min(w, dd) >= 7 && rng.chance(d.hip);
   const parapets: BoxSpec[] = [];
-  for (let i = 0; i < volumes.length; i++) {
-    const v = volumes[i]!;
-    const above = volumes[i + 1];
-    if (above && Math.abs(above.minX - v.minX) < 0.3 && Math.abs(above.maxX - v.maxX) < 0.3 && Math.abs(above.minZ - v.minZ) < 0.3 && Math.abs(above.maxZ - v.maxZ) < 0.3) continue;
-    parapets.push(...parapetsFor(v, rng));
-  }
-  // Roof props: a water tank on many flat roofs, a few HVAC boxes.
   const props: RoofProp[] = [];
-  const roofY = topV.maxY;
-  const rw = topV.maxX - topV.minX - 4,
-    rd = topV.maxZ - topV.minZ - 4;
-  if (!tower && rw > 6 && rd > 6 && rng.chance(0.4)) {
-    const r = rng.range(1.2, 1.7);
-    props.push({ type: PROP_TANK, x: topV.minX + 2 + r + rng.float() * (rw - 2 * r), y: roofY, z: topV.minZ + 2 + r + rng.float() * (rd - 2 * r), sx: r, sy: rng.range(2, 2.8), sz: rng.range(1.6, 2.2), face: 0, variant: rng.int(0, 2) });
+  if (!hip) {
+    for (let i = 0; i < volumes.length; i++) {
+      const v = volumes[i]!;
+      const above = volumes[i + 1];
+      if (above && Math.abs(above.minX - v.minX) < 0.3 && Math.abs(above.maxX - v.maxX) < 0.3 && Math.abs(above.minZ - v.minZ) < 0.3 && Math.abs(above.maxZ - v.maxZ) < 0.3) continue;
+      parapets.push(...parapetsFor(v, rng));
+    }
+    terraceProps(rng, topV, tower, props);
   }
-  if (rw > 8 && rd > 8 && rng.chance(0.5)) {
-    const sx = rng.range(1.6, 3),
-      sz = rng.range(1.6, 3);
-    const x = topV.minX + 2 + sx / 2 + rng.float() * (rw - sx),
-      z = topV.minZ + 2 + sz / 2 + rng.float() * (rd - sz);
-    const clash = props.some((p) => Math.abs(p.x - x) < p.sx + sx / 2 + 1.2 && Math.abs(p.z - z) < p.sx + sz / 2 + 1.2);
-    if (!clash) props.push({ type: PROP_HVAC, x, y: roofY, z, sx, sy: rng.range(1.1, 1.8), sz, face: 0, variant: rng.int(0, 3) });
+  // Cumba bays on the street faces of wooden houses and apartments, from the first floor up to under the cornice.
+  const bays: BoxSpec[] = [];
+  if (!tower && (look === LOOK_WOODEN || look === LOOK_APARTMENT) && floors >= 3 && rng.chance(d.bay)) {
+    const y0 = baseY + (shop ? SHOP_FLOOR : FLOOR) + 0.25,
+      y1 = H - 0.7;
+    if (y1 - y0 >= 2.8) {
+      for (const face of faces.slice(0, 2)) {
+        const g = faceGeom(fp, face);
+        if (g.len < 7) continue;
+        const bw = Math.min(g.len - 3, look === LOOK_WOODEN ? rng.range(2.8, 4.2) : rng.range(3.0, 4.6));
+        const n = g.len > 16 ? 2 : 1;
+        for (let k = 0; k < n; k++) {
+          const c = n === 1 ? rng.range(-0.15, 0.15) * (g.len - bw - 2) : (k === 0 ? -1 : 1) * g.len * 0.25;
+          const out = face === 0 || face === 2 ? 1 : -1;
+          if (g.alongX) {
+            const z0 = out > 0 ? g.z : g.z - BAY_DEPTH;
+            bays.push({ minX: g.x + c - bw / 2, maxX: g.x + c + bw / 2, minY: y0, maxY: y1, minZ: z0, maxZ: z0 + BAY_DEPTH });
+          } else {
+            const x0 = out > 0 ? g.x : g.x - BAY_DEPTH;
+            bays.push({ minX: x0, maxX: x0 + BAY_DEPTH, minY: y0, maxY: y1, minZ: g.z + c - bw / 2, maxZ: g.z + c + bw / 2 });
+          }
+        }
+      }
+    }
+  }
+  // Shop signs above the shop windows on the street faces (fictional Turkish trades).
+  if (shop) {
+    for (const face of faces.slice(0, 2)) {
+      const g = faceGeom(fp, face);
+      if (g.len < 5) continue;
+      props.push({ type: PROP_WALL_SIGN, x: g.x, y: baseY + 2.95, z: g.z, sx: Math.min(g.len - 1.6, rng.range(3.4, 6)), sy: 0.85, sz: 0.12, face, variant: rng.int(0, 15) });
+    }
   }
   const b: Building = {
     id: ctx.buildings.length,
@@ -260,10 +400,51 @@ function addBuilding(ctx: Ctx, fp: Rect, floors: number, d: DistrictSpec, faces:
     footprint: { ...fp },
     seed: rng.int(0, 1 << 30),
   };
+  if (hip) {
+    b.hipRoof = { color: hex(rng.pick(TILES)) };
+    b.roofSteps = hipRoofSteps(topV);
+  }
+  if (bays.length > 0) b.bays = bays;
   // Stone plinth from below the low side up to the floor.
   if (baseY - (lo + CURB) > 0.05) b.plinth = { ...fp, minY: lo - 1, maxY: baseY };
   ctx.buildings.push(b);
   return b;
+}
+
+/** Terrace props: solar water heaters, plastic water tanks and a few air-conditioning boxes, apart from each other. */
+function terraceProps(rng: Rng, v: Volume, tower: boolean, props: RoofProp[]): void {
+  const rw = v.maxX - v.minX - 4,
+    rd = v.maxZ - v.minZ - 4;
+  if (rw < 3 || rd < 3) return;
+  const free = (x: number, z: number, hx: number, hz: number): boolean => props.every((p) => Math.abs(p.x - x) > hx + p.sx / 2 + 1 || Math.abs(p.z - z) > hz + p.sz / 2 + 1);
+  const place = (hx: number, hz: number): [number, number] | null => {
+    for (let k = 0; k < 4; k++) {
+      if (rw < 2 * hx || rd < 2 * hz) return null;
+      const x = v.minX + 2 + hx + rng.float() * (rw - 2 * hx),
+        z = v.minZ + 2 + hz + rng.float() * (rd - 2 * hz);
+      if (free(x, z, hx, hz)) return [x, z];
+    }
+    return null;
+  };
+  if (!tower) {
+    // Solar heaters face south (+z): sx along x, sz the collector's depth.
+    const nSolar = rng.chance(0.65) ? rng.int(1, rw * rd > 200 ? 3 : 2) : 0;
+    for (let i = 0; i < nSolar; i++) {
+      const at = place(1.1, 1.2);
+      if (at) props.push({ type: PROP_SOLAR, x: at[0], y: v.maxY, z: at[1], sx: 2.2, sy: 1.5, sz: 2.4, face: 2, variant: rng.int(0, 1) });
+    }
+    if (rng.chance(0.5)) {
+      const r = rng.range(0.55, 0.75);
+      const at = place(r, r);
+      if (at) props.push({ type: PROP_ROOF_TANK, x: at[0], y: v.maxY, z: at[1], sx: 2 * r, sy: rng.range(1.1, 1.5), sz: 2 * r, face: 0, variant: rng.int(0, 2) });
+    }
+  }
+  if (rng.chance(tower ? 0.6 : 0.3)) {
+    const sx = rng.range(1.4, tower ? 3.2 : 2),
+      sz = rng.range(1.2, tower ? 3.2 : 1.8);
+    const at = place(sx / 2, sz / 2);
+    if (at) props.push({ type: PROP_HVAC, x: at[0], y: v.maxY, z: at[1], sx, sy: rng.range(0.9, tower ? 1.8 : 1.2), sz, face: 0, variant: rng.int(0, 3) });
+  }
 }
 
 /** Lots along the block's long axis, one or two rows deep; street faces recorded per lot. */
@@ -407,9 +588,11 @@ export function generateIstanbul(seed: number): CityLayout {
       }
       let floors = clamp(prev + rng.int(-2, 2), d.floors[0], d.floors[1]);
       // Stone hans and hotels at block corners (about one lot in eight).
-      if (!tower && faces.length >= 2 && rng.chance(0.12)) floors = rng.int(10, 12);
+      // (Not next to a park: the park's trees stay the tallest things around it.)
+      const han = !tower && faces.length >= 2 && rng.chance(0.12) && !parkRects.some((r) => rectGap(r, rect) < 45);
+      if (han) floors = rng.int(10, 12);
       else prev = floors;
-      addBuilding(ctx, rect, floors, d, faces);
+      addBuilding(ctx, rect, floors, d, faces, han);
     };
     for (const lot of makeLots(rng, inner, tower)) place(lot.rect, lot.faces, 0);
   }
@@ -423,27 +606,50 @@ export function generateIstanbul(seed: number): CityLayout {
 
   // --- Trees ---
   const trees: Tree[] = [];
+  // Park species (§4h): plane trees (çınar) with cypresses (servi) and stone pines (fıstık çamı).
+  const parkMix: Record<string, Array<[number, number, [number, number]]>> = {
+    Gülhane: [[TREE_PLANE, 0.72, [18, 26]], [TREE_CYPRESS, 0.14, [14, 19]], [TREE_STONEPINE, 0.14, [14, 19]]],
+    Sarayburnu: [[TREE_PLANE, 0.85, [19, 26]], [TREE_STONEPINE, 0.15, [14, 18]]],
+    Sultanahmet: [[TREE_PLANE, 0.8, [16, 24]], [TREE_CYPRESS, 0.2, [13, 18]]],
+    Gezi: [[TREE_PLANE, 0.85, [16, 23]], [TREE_STONEPINE, 0.15, [13, 18]]],
+    Yıldız: [[TREE_STONEPINE, 0.42, [14, 20]], [TREE_PLANE, 0.48, [18, 26]], [TREE_CYPRESS, 0.1, [14, 19]]],
+  };
+  const pickTree = (mix: Array<[number, number, [number, number]]>): [number, number] => {
+    let r = rng.float();
+    for (const [sp, w, h] of mix) {
+      r -= w;
+      if (r <= 0) return [sp, rng.range(h[0], h[1])];
+    }
+    const last = mix[mix.length - 1]!;
+    return [last[0], rng.range(last[2][0], last[2][1])];
+  };
   for (const p of PARKS) {
     const [s0, s1] = p.spacing;
+    const mix = parkMix[p.name] ?? parkMix.Gülhane!;
     for (let z = p.rect.minZ + 6; z < p.rect.maxZ - 4; z += rng.range(s0, s1)) {
       for (let x = p.rect.minX + 6; x < p.rect.maxX - 4; x += rng.range(s0, s1)) {
         const tx = x + rng.range(-2.5, 2.5),
           tz = z + rng.range(-2.5, 2.5);
         if (mask.isWater(tx, tz) || roadWide.isRoad(tx, tz) || sampleField(coastF, tx, tz) < 4) continue;
-        const sp = rng.chance(0.15) ? TREE_POPLAR : rng.chance(0.5) ? TREE_OAK : TREE_MAPLE;
-        trees.push(makeTree(rng, sp, tx, tz, groundY(tx, tz), rng.range(15, 23), true));
+        // Gülhane's Sarayburnu end keeps to broad plane trees (the park route swings through it).
+        const [sp, h] = p.name === 'Gülhane' && tx > 265 ? [TREE_PLANE, rng.range(20, 26)] : pickTree(mix);
+        trees.push(makeTree(rng, sp, tx, tz, groundY(tx, tz), h, true));
       }
     }
   }
-  // Plane trees in Topkapı's first court and along the Hippodrome.
+  // Plane trees in Topkapı's first court with a row of cypresses along its wall, and along the Hippodrome.
   for (let z = 226; z < 432; z += rng.range(11, 14)) {
     for (let x = 160; x < 197; x += rng.range(11, 14)) {
       if (z > 280 && z < 320) continue;
-      trees.push(makeTree(rng, rng.chance(0.5) ? TREE_OAK : TREE_MAPLE, x, z, groundY(x, z), rng.range(17, 24), true));
+      trees.push(makeTree(rng, TREE_PLANE, x, z, groundY(x, z), rng.range(18, 26), true));
     }
   }
+  for (let z = 222; z < 436; z += 9) {
+    if (z > 282 && z < 318) continue;
+    trees.push(makeTree(rng, TREE_CYPRESS, 149, z, groundY(149, z), rng.range(13, 17), true));
+  }
   for (let z = 408; z < 616; z += 15) {
-    for (const x of [-45, 5]) trees.push(makeTree(rng, TREE_OAK, x, z, groundY(x, z), rng.range(12, 16), true));
+    for (const x of [-45, 5]) trees.push(makeTree(rng, TREE_PLANE, x, z, groundY(x, z), rng.range(13, 17), true));
   }
   // Street trees on the sidewalks of the arterials.
   for (const r of roads) {
@@ -456,7 +662,7 @@ export function generateIstanbul(seed: number): CityLayout {
         if (bi < 0) continue;
         const e = edgeDist(blocks[bi]!, tx, tz);
         if (e < 0.9 || e > 2.3 || roadIdx.isRoad(tx, tz)) continue;
-        trees.push(makeTree(rng, rng.chance(0.6) ? TREE_MAPLE : TREE_OAK, tx, tz, groundY(tx, tz), rng.range(8, 12), false));
+        trees.push(makeTree(rng, rng.chance(0.65) ? TREE_PLANE : TREE_OAK, tx, tz, groundY(tx, tz), rng.range(8, 12), false));
       }
     });
   }
@@ -499,7 +705,7 @@ export function generateIstanbul(seed: number): CityLayout {
     for (const b of buildings) {
       const top = b.volumes[b.volumes.length - 1]!;
       const ground = (b.plinth?.minY ?? top.minY - CURB) + 1;
-      if (top.maxY - ground < 12 || top.maxY - ground > 34 || top.maxX - top.minX < 13 || top.maxZ - top.minZ < 13) continue;
+      if (b.hipRoof || top.maxY - ground < 12 || top.maxY - ground > 34 || top.maxX - top.minX < 13 || top.maxZ - top.minZ < 13) continue;
       const cx = (top.minX + top.maxX) / 2,
         cz = (top.minZ + top.maxZ) / 2;
       const dd = Math.hypot(cx + 40, cz - 235);

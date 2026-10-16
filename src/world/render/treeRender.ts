@@ -2,7 +2,7 @@ import { BufferGeometry, Group, InstancedMesh, Matrix4, Quaternion, Vector3, Col
 import { GeomBuilder } from '../../render/geomBuilder';
 import { foliageMaterial } from '../../render/materials';
 import { Rng } from '../../core/rng';
-import { TREE_MAPLE, TREE_OAK, TREE_PINE, TREE_POPLAR, type Tree } from '../types';
+import { TREE_CYPRESS, TREE_MAPLE, TREE_OAK, TREE_PINE, TREE_PLANE, TREE_POPLAR, TREE_STONEPINE, type Tree } from '../types';
 
 /**
  * Tree species geometry, normalised to a total height of 1 (instance scale =
@@ -12,11 +12,12 @@ import { TREE_MAPLE, TREE_OAK, TREE_PINE, TREE_POPLAR, type Tree } from '../type
 function speciesGeometry(species: number, variant: number, detail: number): BufferGeometry {
   const b = new GeomBuilder([{ name: 'aSway', size: 1 }]);
   const rng = new Rng(1000 + species * 17 + variant);
-  const trunk: [number, number, number] = species === TREE_PINE ? [0.36, 0.24, 0.16] : species === TREE_POPLAR ? [0.52, 0.46, 0.36] : [0.4, 0.27, 0.18];
+  const trunk: [number, number, number] =
+    species === TREE_PINE ? [0.36, 0.24, 0.16] : species === TREE_POPLAR ? [0.52, 0.46, 0.36] : species === TREE_PLANE ? [0.74, 0.7, 0.58] : species === TREE_STONEPINE ? [0.5, 0.32, 0.22] : [0.4, 0.27, 0.18];
   const sway = (y: number): number => Math.max(0, y - 0.25) * 1.6;
   const tr = 0.022;
   b.setColorArr(trunk);
-  const trunkTop = species === TREE_PINE ? 0.6 : species === TREE_POPLAR ? 0.5 : 0.56;
+  const trunkTop = species === TREE_PINE ? 0.6 : species === TREE_POPLAR ? 0.5 : species === TREE_CYPRESS ? 0.3 : species === TREE_STONEPINE ? 0.82 : 0.56;
   // Trunk (normalised radius; instances scale uniformly so radius = 0.022 * H)
   const t0 = b.vertexCount;
   b.cylinder(0, 0, 0, trunkTop, tr * 1.25, tr * 0.7, detail === 0 ? 4 : 6, false);
@@ -98,6 +99,52 @@ function speciesGeometry(species: number, variant: number, detail: number): Buff
       cone(0.42, 0.74, 0.18, g2);
       cone(0.6, 0.9, 0.13, g1);
       cone(0.76, 1.0, 0.08, g2);
+      break;
+    }
+    case TREE_PLANE: {
+      // Çınar: a broad crown of layered, flattened clumps.
+      const greens: Array<[number, number, number]> = [
+        [0.28, 0.52, 0.2],
+        [0.34, 0.6, 0.24],
+        [0.4, 0.66, 0.28],
+      ];
+      blob(0, 0.6, 0, 0.34, 0.21, 0.34, greens[1]!);
+      if (detail === 0) {
+        blob(0, 0.76, 0, 0.24, 0.13, 0.24, greens[2]!);
+        break;
+      }
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2 + rng.range(-0.25, 0.25);
+        blob(Math.cos(a) * 0.21, 0.54 + rng.range(-0.03, 0.06), Math.sin(a) * 0.21, 0.17, 0.13, 0.17, greens[i % 3]!);
+      }
+      blob(0.05, 0.77, -0.03, 0.21, 0.12, 0.21, greens[2]!);
+      blob(-0.04, 0.88, 0.04, 0.12, 0.07, 0.12, greens[0]!);
+      break;
+    }
+    case TREE_CYPRESS: {
+      // Servi: a dark green column with a pointed top.
+      const g1: [number, number, number] = [0.13, 0.32, 0.17];
+      const g2: [number, number, number] = [0.16, 0.37, 0.2];
+      if (detail === 0) {
+        blob(0, 0.54, 0, 0.1, 0.46, 0.1, g1);
+        break;
+      }
+      blob(0, 0.42, 0, 0.11, 0.32, 0.11, g1);
+      blob(0, 0.66, 0, 0.09, 0.26, 0.09, g2);
+      cone(0.8, 1.0, 0.06, g1);
+      break;
+    }
+    case TREE_STONEPINE: {
+      // Fıstık çamı: a bare trunk under a flat umbrella crown.
+      const g1: [number, number, number] = [0.2, 0.4, 0.2];
+      const g2: [number, number, number] = [0.26, 0.46, 0.22];
+      blob(0, 0.86, 0, 0.35, 0.1, 0.35, g1);
+      if (detail === 0) break;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.5;
+        blob(Math.cos(a) * 0.17, 0.9, Math.sin(a) * 0.17, 0.18, 0.08, 0.18, i % 2 ? g1 : g2);
+      }
+      blob(0, 0.94, 0, 0.16, 0.06, 0.16, g2);
       break;
     }
     case TREE_POPLAR: {

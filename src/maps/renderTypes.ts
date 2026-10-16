@@ -23,6 +23,9 @@ export interface MapVisuals {
   water(L: CityLayout): WaterVisuals;
   /** Fogged silhouettes beyond the playable area. */
   backdrop(L: CityLayout): GeomBuilder;
+  /** Window atlas styles (render/textures.ts) and shop sign names; Manhattan's when absent. */
+  windowAtlas?: 'default' | 'istanbul';
+  signNames?: readonly string[];
   minimap: {
     extent(L: CityLayout): Extent;
     /** Paints the static map in world units; `px` is one base pixel in metres. */

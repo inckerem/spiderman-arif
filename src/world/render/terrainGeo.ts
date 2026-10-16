@@ -1,6 +1,7 @@
 import { GeomBuilder } from '../../render/geomBuilder';
 import type { HeightfieldTerrain } from '../../physics/heightfield';
 import { CURB } from '../../physics/terrain';
+import { RectIndex, RoadIndex, type RoadSegment } from '../../physics/roadIndex';
 import type { CityLayout, Rect, RoadPiece } from '../types';
 
 const PAVING: [number, number, number] = [0.7, 0.66, 0.59];
@@ -42,6 +43,13 @@ export function buildHeightfieldGround(L: CityLayout, t: HeightfieldTerrain): { 
   const parks = L.parks ?? [];
   const inPark = (x: number, z: number): boolean => parks.some((p) => x > p.minX && x < p.maxX && z > p.minZ && z < p.maxZ);
   const n = { nx: 0, ny: 1, nz: 0 };
+  const colorAt = (x: number, z: number): void => {
+    const park = inPark(x, z);
+    const k2 = 0.5 + 0.5 * Math.sin(x * 0.031) * Math.cos(z * 0.027);
+    const a = park ? GRASS_A : PAVING,
+      b = park ? GRASS_B : PAVING_B;
+    g.setColor(a[0] + (b[0] - a[0]) * k2, a[1] + (b[1] - a[1]) * k2, a[2] + (b[2] - a[2]) * k2);
+  };
   const vertexAt = (i: number, j: number): number => {
     const k = j * vx + i;
     if (idx[k]! >= 0) return idx[k]!;
@@ -56,28 +64,126 @@ export function buildHeightfieldGround(L: CityLayout, t: HeightfieldTerrain): { 
       y = 0;
     } else y = t.baseHeight(x, z);
     t.normalAt(x, z, n);
-    const park = inPark(x, z);
-    const k2 = 0.5 + 0.5 * Math.sin(x * 0.031) * Math.cos(z * 0.027);
-    const a = park ? GRASS_A : PAVING,
-      b = park ? GRASS_B : PAVING_B;
-    g.setColor(a[0] + (b[0] - a[0]) * k2, a[1] + (b[1] - a[1]) * k2, a[2] + (b[2] - a[2]) * k2);
+    colorAt(x, z);
     idx[k] = g.vertex(x, y, z, n.nx, n.ny, n.nz);
     return idx[k]!;
   };
-  for (let j = 0; j < nz; j++) {
-    for (let i = 0; i < nx; i++) {
-      const k = j * vx + i;
-      if (wet[k] && wet[k + 1] && wet[k + vx] && wet[k + vx + 1]) continue;
-      const a = vertexAt(i, j + 1),
-        b = vertexAt(i + 1, j + 1),
-        c = vertexAt(i + 1, j),
-        e = vertexAt(i, j);
-      g.tri(a, b, c);
-      g.tri(a, c, e);
+  // Cells under a raised slab (blocks, plazas, parks) are hidden by it: skip them when the cell and
+  // its neighbours are dry (slab quads near the water are left out, so the grid must stay there).
+  const raisedRects: Rect[] = [...L.blocks, ...L.plazas, ...parks];
+  const raised = new RectIndex(raisedRects, { minX: x0 - STEP, maxX: x0 + (nx + 1) * STEP, minZ: z0 - STEP, maxZ: z0 + (nz + 1) * STEP });
+  // Cells inside a road ribbon (1 m in from its edges, polyline ends pulled in by half the width) are hidden by the decal.
+  const segs: RoadSegment[] = [];
+  for (const r of L.roads ?? []) {
+    const n = r.pts.length;
+    for (let i = 0; i + 1 < n; i++) {
+      let [ax, az] = r.pts[i]!;
+      let [bx, bz] = r.pts[i + 1]!;
+      const len = Math.hypot(bx - ax, bz - az);
+      const cut = r.width / 2;
+      const ca = i === 0 ? cut : 0,
+        cb = i + 2 === n ? cut : 0;
+      if (len <= ca + cb + 0.5) continue;
+      const ux = (bx - ax) / len,
+        uz = (bz - az) / len;
+      ax += ux * ca;
+      az += uz * ca;
+      bx -= ux * cb;
+      bz -= uz * cb;
+      segs.push({ ax, az, bx, bz, width: r.width - 2 });
     }
   }
-  // Raised slabs: blocks (sidewalks), plazas, parks.
-  for (const r of L.blocks) slab(g, t, r, SIDEWALK, SIDEWALK);
+  const onRoad = new RoadIndex(segs, { minX: x0 - STEP, maxX: x0 + (nx + 1) * STEP, minZ: z0 - STEP, maxZ: z0 + (nz + 1) * STEP });
+  const covered = (i: number, j: number): boolean => {
+    if (i < 1 || j < 1 || i + 2 > nx || j + 2 > nz) return false;
+    for (let b = j - 1; b <= j + 2; b++) for (let a = i - 1; a <= i + 2; a++) if (wet[b * vx + a]) return false;
+    const xa = x0 + i * STEP,
+      za = z0 + j * STEP;
+    const r = raised.find(xa + STEP / 2, za + STEP / 2);
+    if (r >= 0) {
+      const R = raisedRects[r]!;
+      if (xa >= R.minX && xa + STEP <= R.maxX && za >= R.minZ && za + STEP <= R.maxZ) return true;
+    }
+    for (let b = 0; b <= 2; b++) for (let a = 0; a <= 2; a++) if (!onRoad.isRoad(xa + (a * STEP) / 2, za + (b * STEP) / 2)) return false;
+    return true;
+  };
+  // Beyond the playable bounds (seen only from afar) dry land uses 16 m cells: a fan from the cell
+  // centre through every 4 m vertex on edges shared with finer cells, so no edge has a T-junction.
+  const C = 4;
+  const ncx = Math.floor(nx / C),
+    ncz = Math.floor(nz / C);
+  const coarse = new Uint8Array(ncx * ncz);
+  const M = 8;
+  for (let J = 0; J < ncz; J++) {
+    for (let I = 0; I < ncx; I++) {
+      const xa = x0 + I * C * STEP,
+        za = z0 + J * C * STEP,
+        xb = xa + C * STEP,
+        zb = za + C * STEP;
+      if (xb > B.minX - M && xa < B.maxX + M && zb > B.minZ - M && za < B.maxZ + M) continue;
+      let dry = true;
+      for (let b = J * C; b <= J * C + C && dry; b++) for (let a = I * C; a <= I * C + C; a++) if (wet[b * vx + a]) dry = false;
+      if (dry) coarse[J * ncx + I] = 1;
+    }
+  }
+  const isCoarse = (I: number, J: number): boolean => I >= 0 && J >= 0 && I < ncx && J < ncz && coarse[J * ncx + I] === 1;
+  const fineCell = (i: number, j: number): void => {
+    const k = j * vx + i;
+    if (wet[k] && wet[k + 1] && wet[k + vx] && wet[k + vx + 1]) return;
+    if (covered(i, j)) return;
+    const a = vertexAt(i, j + 1),
+      b = vertexAt(i + 1, j + 1),
+      c = vertexAt(i + 1, j),
+      e = vertexAt(i, j);
+    g.tri(a, b, c);
+    g.tri(a, c, e);
+  };
+  for (let j = 0; j < nz; j++) {
+    for (let i = 0; i < nx; i++) {
+      const I = Math.floor(i / C),
+        J = Math.floor(j / C);
+      if (isCoarse(I, J)) continue;
+      fineCell(i, j);
+    }
+  }
+  for (let J = 0; J < ncz; J++) {
+    for (let I = 0; I < ncx; I++) {
+      if (!isCoarse(I, J)) continue;
+      const i0 = I * C,
+        j0 = J * C,
+        i1 = i0 + C,
+        j1 = j0 + C;
+      const fineS = !isCoarse(I, J + 1),
+        fineE = !isCoarse(I + 1, J),
+        fineN = !isCoarse(I, J - 1),
+        fineW = !isCoarse(I - 1, J);
+      if (!fineS && !fineE && !fineN && !fineW) {
+        const a = vertexAt(i0, j1),
+          b = vertexAt(i1, j1),
+          c = vertexAt(i1, j0),
+          e = vertexAt(i0, j0);
+        g.tri(a, b, c);
+        g.tri(a, c, e);
+        continue;
+      }
+      // Boundary loop counter-clockwise from above: along +z edge to +x, up the +x edge, back along -z, down -x.
+      const loop: number[] = [];
+      for (let i = i0; i < i1; i += fineS ? 1 : C) loop.push(vertexAt(i, j1));
+      for (let j = j1; j > j0; j -= fineE ? 1 : C) loop.push(vertexAt(i1, j));
+      for (let i = i1; i > i0; i -= fineN ? 1 : C) loop.push(vertexAt(i, j0));
+      for (let j = j0; j < j1; j += fineW ? 1 : C) loop.push(vertexAt(i0, j));
+      const xc = x0 + (i0 + C / 2) * STEP,
+        zc = z0 + (j0 + C / 2) * STEP;
+      t.normalAt(xc, zc, n);
+      colorAt(xc, zc);
+      const centre = g.vertex(xc, t.baseHeight(xc, zc), zc, n.nx, n.ny, n.nz);
+      for (let q = 0; q < loop.length; q++) g.tri(centre, loop[q]!, loop[(q + 1) % loop.length]!);
+    }
+  }
+  // Raised slabs: blocks (sidewalks), plazas, parks. Quads under a building (it stands on its floor or plinth) are left out.
+  const fps = L.buildings.map((b) => b.footprint);
+  const under = { rects: fps, index: new RectIndex(fps, { minX: x0, maxX: x0 + nx * STEP, minZ: z0, maxZ: z0 + nz * STEP }) };
+  for (const r of L.blocks) slab(g, t, r, SIDEWALK, SIDEWALK, under);
   for (const r of L.plazas) slab(g, t, r, PLAZA, PLAZA);
   for (const r of parks) slab(g, t, r, GRASS_A, GRASS_B);
   // Roads (decals on the road level).
@@ -133,12 +239,25 @@ export function buildHeightfieldGround(L: CityLayout, t: HeightfieldTerrain): { 
   return { ground: g, decals: d };
 }
 
+/** A quad entirely inside one building footprint. */
+interface Footprints {
+  rects: Rect[];
+  index: RectIndex;
+}
+
+function hidden(under: Footprints, xa: number, za: number, xb: number, zb: number): boolean {
+  const k = under.index.find((xa + xb) / 2, (za + zb) / 2);
+  if (k < 0) return false;
+  const R = under.rects[k]!;
+  return xa >= R.minX - 0.01 && xb <= R.maxX + 0.01 && za >= R.minZ - 0.01 && zb <= R.maxZ + 0.01;
+}
+
 function inside(B: Rect, x: number, z: number, pad: number): boolean {
   return x > B.minX - pad && x < B.maxX + pad && z > B.minZ - pad && z < B.maxZ + pad;
 }
 
 /** A slab draped over the terrain at the curb height, with curb sides down to the road level. */
-function slab(g: GeomBuilder, t: HeightfieldTerrain, r: Rect, top: [number, number, number], top2: [number, number, number]): void {
+function slab(g: GeomBuilder, t: HeightfieldTerrain, r: Rect, top: [number, number, number], top2: [number, number, number], under?: Footprints): void {
   const w = r.maxX - r.minX,
     dd = r.maxZ - r.minZ;
   const nx = Math.max(1, Math.ceil(w / STEP)),
@@ -161,6 +280,7 @@ function slab(g: GeomBuilder, t: HeightfieldTerrain, r: Rect, top: [number, numb
   for (let j = 0; j < nz; j++) {
     for (let i = 0; i < nx; i++) {
       if (wet(i, j) || wet(i + 1, j) || wet(i, j + 1) || wet(i + 1, j + 1)) continue;
+      if (under && hidden(under, r.minX + (w * i) / nx, r.minZ + (dd * j) / nz, r.minX + (w * (i + 1)) / nx, r.minZ + (dd * (j + 1)) / nz)) continue;
       const a = base + (j + 1) * row + i,
         b = base + (j + 1) * row + i + 1,
         c = base + j * row + i + 1,

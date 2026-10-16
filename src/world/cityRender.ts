@@ -60,8 +60,8 @@ export async function buildCityVisuals(L: CityLayout, visuals: MapVisuals, onPro
   };
   const group = new Group();
   group.name = 'city';
-  shared.uWinAtlas.value = makeWindowAtlas();
-  const signAtlas = makeSignAtlas();
+  shared.uWinAtlas.value = makeWindowAtlas(visuals.windowAtlas);
+  const signAtlas = makeSignAtlas(visuals.signNames);
   shared.uSignAtlas.value = signAtlas.texture;
   const matFacade = facadeMaterial();
   let triangles = 0;

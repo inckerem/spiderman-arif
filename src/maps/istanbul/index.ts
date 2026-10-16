@@ -39,6 +39,8 @@ function waypoints(L: CityLayout, t: TerrainModel): Waypoint[] {
 function allWaypoints(L: CityLayout, t: TerrainModel): Waypoint[] {
   const out: Waypoint[] = [];
   for (const b of L.buildings) {
+    // Flat terraces only: a hip roof is no place to land.
+    if (b.hipRoof) continue;
     const v = b.volumes[b.volumes.length - 1]!;
     const ground = b.plinth ? b.plinth.minY + 1 : b.volumes[0]!.minY;
     if (v.maxY - ground < 14 || v.maxY - ground > 170 || v.maxX - v.minX < 12 || v.maxZ - v.minZ < 12) continue;

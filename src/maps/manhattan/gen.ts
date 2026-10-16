@@ -23,6 +23,9 @@ import {
   SP_TRAFFIC_LIGHT,
   SP_TRASH,
   TREE_MAPLE,
+  TREE_PLANE,
+  TREE_CYPRESS,
+  TREE_STONEPINE,
   TREE_OAK,
   TREE_PINE,
   TREE_POPLAR,
@@ -552,6 +555,25 @@ export function makeTree(rng: Rng, species: number, x: number, z: number, y: num
       ry = 0.27 * height;
       cyF = 0.62;
       trunkTopF = 0.5;
+      break;
+    // Istanbul species (M13): the plane's broad layered crown, the columnar cypress, the stone pine's high umbrella.
+    case TREE_PLANE:
+      rx = 0.33 * height;
+      ry = 0.27 * height;
+      cyF = 0.64;
+      trunkTopF = 0.5;
+      break;
+    case TREE_CYPRESS:
+      rx = 0.09 * height;
+      ry = 0.44 * height;
+      cyF = 0.54;
+      trunkTopF = 0.3;
+      break;
+    case TREE_STONEPINE:
+      rx = 0.34 * height;
+      ry = 0.13 * height;
+      cyF = 0.84;
+      trunkTopF = 0.76;
       break;
     default:
       rx = 0.31 * height;

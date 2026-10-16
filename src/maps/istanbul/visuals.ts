@@ -10,6 +10,7 @@ import type { MapVisuals, WaterVisuals } from '../renderTypes';
 import { istanbulParts, istanbulTerrain } from './gen';
 import { drawParts } from '../common/partsGeo';
 import { istanbulMinimapExtent, paintIstanbulMinimap } from './minimap';
+import { tr } from '../../i18n/tr';
 
 /** Shore distance texture size (texels per side, about 2.1 m each over the map extent). */
 const SDF_SIZE = 1024;
@@ -82,5 +83,7 @@ export const ISTANBUL_VISUALS: MapVisuals = {
   ground: (L) => buildHeightfieldGround(L, istanbulTerrain(L)),
   water: buildWater,
   backdrop: buildBackdrop,
+  windowAtlas: 'istanbul',
+  signNames: tr.signsIstanbul,
   minimap: { extent: istanbulMinimapExtent, paint: paintIstanbulMinimap },
 };

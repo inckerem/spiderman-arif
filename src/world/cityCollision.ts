@@ -23,6 +23,8 @@ import {
   PROP_BILLBOARD,
   PROP_BLADE_SIGN,
   PROP_HVAC,
+  PROP_ROOF_TANK,
+  PROP_SOLAR,
   PROP_TANK,
   SP_BENCH,
   SP_BOLLARD,
@@ -42,6 +44,8 @@ export const LAMP_HEIGHT = 7.2;
 export const PARK_LAMP_HEIGHT = 4.4;
 export const TRAFFIC_LIGHT_HEIGHT = 6.4;
 export const BILLBOARD_POST = 2.6;
+/** Solar heater collider steps from the back (north) to the front, as shares of its height (the collector slope passes through them). */
+export const SOLAR_STEP_TOPS = [1, 0.5667, 0.3667];
 
 /** Register every collider of the generated city: buildings, trees and props, then the map's own. */
 export function buildCollisionWorld(layout: CityLayout, map: MapDefinition): CollisionWorld {
@@ -102,10 +106,26 @@ export function buildCollisionWorld(layout: CityLayout, map: MapDefinition): Col
           if (pr.face === 3) w.addBox(pr.x - half, pr.y, pr.z - o, pr.x + half, pr.y + pr.sy, pr.z, F_PROP | F_ANCHOR, SURF_METAL, b.id);
           break;
         }
+        case PROP_SOLAR: {
+          // Collector facing south (+z) rising to a lying tank at the back: three steps along z, each within 0.3 m of the slope.
+          const hx = pr.sx / 2,
+            t = pr.sz / 6;
+          for (let k = 0; k < 3; k++) {
+            const top = pr.y + pr.sy * SOLAR_STEP_TOPS[k]!;
+            w.addBox(pr.x - hx, pr.y, pr.z + t * (2 * k - 3), pr.x + hx, top, pr.z + t * (2 * k - 1), F_PROP | F_CAMERA, SURF_METAL, b.id);
+          }
+          break;
+        }
+        case PROP_ROOF_TANK:
+          w.addCylinder(pr.x, pr.z, pr.y, pr.y + pr.sy, pr.sx / 2, F_PROP | F_CAMERA, SURF_METAL, b.id);
+          break;
         default:
           break;
       }
     }
+    // Hip roof steps (not anchors: a roof ledge is no swing point) and cumba bays (Istanbul).
+    if (b.roofSteps) for (const r of b.roofSteps) w.addBox(r.minX, r.minY, r.minZ, r.maxX, r.maxY, r.maxZ, F_BUILDING | F_CAMERA, SURF_STONE, b.id);
+    if (b.bays) for (const r of b.bays) w.addBox(r.minX, r.minY, r.minZ, r.maxX, r.maxY, r.maxZ, BLD, SURF_WOOD, b.id);
   }
   // Trees: trunk cylinder + canopy ellipsoid, both anchors.
   layout.trees.forEach((t, i) => {
