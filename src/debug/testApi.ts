@@ -34,6 +34,7 @@ import {
 } from './testDrivers';
 import { makeAnchorResult } from '../player/targeting';
 import { ES_NAMES, type EnemyKind } from '../combat/types';
+import { CrimeDriver, combatHudDom } from './crimeDrivers';
 import { combatComboTest, combatDodgeTest, combatDroneTest, combatLineTest, combatRoutingTest, combatShieldTest, combatShotTest } from './combatDrivers';
 
 declare global {
@@ -57,8 +58,8 @@ export function installTestApi(game: Game, app?: App): void {
       game.attractEnabled = !on;
       // Combat stays off in manual mode unless a test enables it (combat.enable), and never spawns on its own.
       game.combatEnabled = !on;
-      game.combatSim.scheduler = !on;
-      game.combatSim.roaming = !on;
+      // Crime events and roaming follow the setting outside manual mode, never in it.
+      game.setCrimeEvents(game.crimeEvents);
       if (on) game.resetCombat();
       game.playing = true;
       game.view = 'play';
@@ -282,6 +283,23 @@ export function installTestApi(game: Game, app?: App): void {
       shotTest: () => combatShotTest(game),
       shieldTest: () => combatShieldTest(game),
       droneTest: () => combatDroneTest(game),
+      /** Crime events (chunk 7): what this client knows, the HUD's DOM, and the event driver (announce, then the bot). */
+      crimes: () => game.combatView.crimes.map((c) => ({ ...c })),
+      hudDom: () => combatHudDom(),
+      crimeDriver: null as CrimeDriver | null,
+      crimeAnnounce(): Record<string, unknown> {
+        api.combat.crimeDriver?.restore();
+        api.combat.crimeDriver = new CrimeDriver(game, app);
+        return api.combat.crimeDriver.announce();
+      },
+      crimeBot(limit = 240, stop?: () => boolean): Record<string, unknown> {
+        const d = api.combat.crimeDriver;
+        if (!d) return { error: 'no driver' };
+        const r = d.crimeBot(limit, stop);
+        d.restore();
+        api.combat.crimeDriver = null;
+        return r;
+      },
       /** Own combat state and the recent combat events (room time, event). */
       state(): Record<string, unknown> {
         const v = game.combatView;

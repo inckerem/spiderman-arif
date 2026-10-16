@@ -50,6 +50,8 @@ export class RooftopMoment {
   usedLine = false;
   /** The player set the hour during the moment: it is not restored. */
   hourTaken = false;
+  /** Combat (M11): while this returns true (enemies engaged or an event close by) the moment does not arm. */
+  blocked: (() => boolean) | null = null;
   private t = 0;
   /** Signed hours from the saved hour to night, and the share of it reached. */
   private span = 0;
@@ -96,7 +98,7 @@ export class RooftopMoment {
     switch (this.phase) {
       case 'idle':
       case 'arming':
-        if (touched || !this.ready || !this.stillOnRoof()) {
+        if (touched || !this.ready || !this.stillOnRoof() || this.blocked?.()) {
           this.phase = 'idle';
           this.idleT = 0;
           break;
@@ -137,6 +139,11 @@ export class RooftopMoment {
     this.usedLine = false;
     if (this.phase === 'arming') this.phase = 'idle';
     this.idleT = 0;
+  }
+
+  /** Combat ends a running moment (a hit, an enemy engaging, an event starting close by): it eases out as after an input. */
+  interrupt(): void {
+    if (this.phase === 'in' || this.phase === 'active') this.end();
   }
 
   /** Played long enough since the last spawn and moved. */

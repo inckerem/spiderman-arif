@@ -362,3 +362,131 @@ test('c7. roster: shot and bolt threat cues with dodges, a brute shield yank, ai
   expect(dr.poseFinite).toBe(true);
   expectClean(problems);
 });
+
+// c8. Crime events and the combat HUD: an event announced in the distance (minimap marker, beacon, banner,
+// on-screen marker), a combat bot clears it (cleared banner with the reward), the health bar under damage and
+// regeneration, the dodge cue and the target bar, the settings toggle and the rooftop moment's combat check.
+test('c8. crime event: announce, marker, beacon, banner; a bot clears it; HUD health, regen, dodge cue', async ({ page }) => {
+  test.setTimeout(15 * 60 * 1000);
+  const problems = await openGame(page);
+  await page.evaluate(() => {
+    const g = (window as any).__game;
+    g.app.state = 'playing';
+    g.app.ui.setHudVisible(true);
+    g.showUi(true);
+  });
+  const a = await page.evaluate(() => (window as any).__game.combat.crimeAnnounce());
+  saveResult('c8-crime-announce', a);
+  console.log('c8. announce', JSON.stringify({ ...a, atAnnounce: undefined, hud: undefined }));
+  expect(a.eventId).toBeGreaterThan(0);
+  expect(a.dist).toBeGreaterThan(250);
+  expect(a.viewCrimes).toBe(1);
+  expect(a.atAnnounce.layer).toBe(true);
+  expect(a.atAnnounce.banner).toBe(true);
+  expect(a.atAnnounce.bannerTitle).toBe('Soygun ihbarı');
+  expect(a.atAnnounce.bannerSub).toMatch(/dükkân önü · \d+ m$/);
+  expect(a.atAnnounce.marker).toBe(true);
+  expect(a.atAnnounce.markerText).toMatch(/^Soygun · \d+ m$/);
+  expect(a.minimap.events + a.minimap.rim).toBe(1);
+  expect(a.beacons).toBe(1);
+  expect(a.beaconVisible).toBe(true);
+  expect(a.total).toBeGreaterThanOrEqual(4);
+  expect(a.waveInSim).toBe(a.total);
+
+  const b = await page.evaluate(() => (window as any).__game.combat.crimeBot(240));
+  saveResult('c8-crime-bot', b);
+  console.log('c8. bot', JSON.stringify({ ...b, hud: undefined }));
+  expect(b.ended?.result).toBe('clear');
+  expect(b.ended.pids).toContain(1);
+  expect(b.hits).toBeGreaterThanOrEqual(a.total);
+  expect(b.score).toBe(b.ended.score);
+  expect(b.score).toBeGreaterThan(0);
+  expect(b.hud.banner).toBe(true);
+  expect(b.hud.bannerTitle).toBe('Olay temizlendi!');
+  expect(b.hud.bannerSub).toBe(`+${b.ended.focus} odak · +${b.ended.score} puan`);
+  expect(b.hud.score).toBe(String(b.score));
+  expect(b.hud.marker).toBe(false);
+  expect(b.viewCrimes).toBe(0);
+
+  // Health bar: damage, then regeneration after regenDelay; the dodge cue and the target bar on a bat thug's swing.
+  const h = await page.evaluate(() => {
+    const g = (window as any).__game;
+    const game = g.game;
+    const C = g.combat;
+    const T = g.tuning;
+    const frame = () => {
+      g.uiFrame(1 / 30);
+      return C.hudDom();
+    };
+    C.clear();
+    // A known street spot (an intersection near the city spawn), looking along the street.
+    const spot = C.arenaSpots(1, 0)[0];
+    g.teleport(spot[0], spot[1] + 0.1, spot[2]);
+    g.setLook(0, -0.05);
+    g.step(8);
+    C.setHp(40);
+    const hurt = frame();
+    g.step(Math.round((T.combat.regenDelay - 1) * 120));
+    const waiting = frame();
+    g.step(Math.round(1.6 * 120));
+    const regen = frame();
+    g.step(Math.round(5 * 120));
+    const full = frame();
+    // A bat thug in front: its wind-up shows the spider-sense and "Kaç!" in the dodge window; it lands without a dodge.
+    const id = C.spawnAhead(1, 1.7);
+    const t0 = C.state().now;
+    let cue: any = null,
+      landed = false;
+    for (let i = 0; i < 120 * 6 && !landed; i++) {
+      g.step(1);
+      const st = C.state();
+      const th = st.threat;
+      if (th && !cue && th.at - st.now <= T.combat.dodgeLookahead && th.at - st.now >= 0) cue = frame();
+      landed = st.events.some((e: any) => e.time > t0 && e.e === 'hit' && e.tgt === 0x8000 + 1 && e.dmg > 0);
+    }
+    g.step(2);
+    const after = frame();
+    // The rooftop moment's combat check: an alerted enemy close by keeps it away.
+    const blockedFight = g.app.moment.blocked();
+    C.clear();
+    g.step(4);
+    frame();
+    const blockedClear = g.app.moment.blocked();
+    // Settings toggle "Suç olayları": the scheduler and roaming follow it outside manual mode.
+    const s = g.app.ui.settings;
+    game.loop.manual = false;
+    g.app.applySettings({ ...s, crimeEvents: true });
+    const on = [game.combatSim.scheduler, game.combatSim.roaming];
+    g.app.applySettings({ ...s, crimeEvents: false });
+    const off = [game.combatSim.scheduler, game.combatSim.roaming];
+    game.loop.manual = true;
+    g.app.applySettings({ ...s, crimeEvents: true });
+    const manual = [game.combatSim.scheduler, game.combatSim.roaming];
+    return { hurt, waiting, regen, full, id, cue, landed, after, blockedFight, blockedClear, on, off, manual, toggle: !!document.getElementById('sk-st-crimeEvents') };
+  });
+  saveResult('c8-combat-hud', h);
+  console.log('c8. hud', JSON.stringify({ hurt: h.hurt.hp, waiting: [h.waiting.hp, h.waiting.regen], regen: [h.regen.hp, h.regen.regen], full: h.full.hp, cue: h.cue && [h.cue.sense, h.cue.dodge, h.cue.dodgeText, h.cue.targetName], after: h.after.hp, blocked: [h.blockedFight, h.blockedClear], on: h.on, off: h.off, manual: h.manual }));
+  expect(h.hurt.hp).toBe('40');
+  expect(h.hurt.segs).toBeCloseTo(4, 1);
+  expect(h.waiting.hp).toBe('40');
+  expect(h.waiting.regen).toBe(false);
+  expect(Number(h.regen.hp)).toBeGreaterThan(40);
+  expect(h.regen.regen).toBe(true);
+  expect(h.full.hp).toBe('100');
+  expect(h.full.regen).toBe(false);
+  expect(h.id).toBeGreaterThan(0);
+  expect(h.cue?.sense).toBe(true);
+  expect(h.cue?.dodge).toBe(true);
+  expect(h.cue?.dodgeText).toBe('KAÇ!Boşluk');
+  expect(h.cue?.target).toBe(true);
+  expect(h.cue?.targetName).toBe('Sopalı');
+  expect(h.landed).toBe(true);
+  expect(Number(h.after.hp)).toBeLessThan(100);
+  expect(h.blockedFight).toBe(true);
+  expect(h.blockedClear).toBe(false);
+  expect(h.toggle).toBe(true);
+  expect(h.on).toEqual([true, true]);
+  expect(h.off).toEqual([false, false]);
+  expect(h.manual).toEqual([false, false]);
+  expectClean(problems);
+});

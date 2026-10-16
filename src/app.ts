@@ -9,6 +9,7 @@ import type { Action } from './input/bindings';
 import { RooftopMoment } from './extras/rooftopMoment';
 import { tuning } from './config/tuning';
 import { TouchControls, detectTouchMode, type TouchButtonHandler } from './input/touch';
+import { CombatUi } from './combatUi';
 
 export type AppState = 'loading' | 'menu' | 'playing' | 'paused' | 'photo';
 
@@ -52,6 +53,8 @@ export class App {
   extraHud: ((hud: HudState) => void) | null = null;
   /** Standing still on a roof: night, rain and music (this client only). */
   moment!: RooftopMoment;
+  /** Combat HUD, minimap layer, event banners and sounds (M11). */
+  combatUi!: CombatUi;
   private readonly hud: HudState = {
     speed: 0,
     altitude: 0,
@@ -133,6 +136,7 @@ export class App {
       game.player.targeting.touchAim = true;
     }
     this.moment = new RooftopMoment(game);
+    this.combatUi = new CombatUi(game, ui, this.audio, this.moment, this.touchMode);
     this.applySettings(ui.settings);
     this.wire();
     game.showMenu();
@@ -248,6 +252,7 @@ export class App {
     this.ui.setHudVisible(true);
     game.input.clearAll();
     game.startPlay();
+    this.combatUi.reset();
     this.state = 'playing';
     this.audio.setMenuMode(false);
     this.audio.unlock();
@@ -436,6 +441,7 @@ export class App {
     game.dayNight.dayLengthMinutes = s.dayLengthMinutes;
     game.input.setBindings(s.bindings);
     game.setCostume(s.costume);
+    game.setCrimeEvents(s.crimeEvents);
     this.audio.setVolumes(s.masterVolume, s.musicVolume, s.sfxVolume);
   }
 
@@ -444,6 +450,7 @@ export class App {
   private onEvent(e: PlayerEvent): void {
     const a = this.audio;
     const pl = this.game.player;
+    this.combatUi.onPlayerEvent(e);
     switch (e.type) {
       case 'webFire':
         a.webShot(e.hand === 0 ? -0.6 : 0.6);
@@ -535,6 +542,7 @@ export class App {
       ui.updateMinimap(pl.pos.x, pl.pos.z, game.rig.yaw, this.minimapRings);
     }
     ui.updateHud(hud);
+    this.combatUi.frame(dt, this.state === 'playing' || this.state === 'paused', this.state === 'playing' && game.playing);
     const touch = this.touch;
     if (touch) {
       touch.setView(this.state === 'playing' && game.playing ? 'play' : this.state === 'photo' ? 'photo' : 'off');

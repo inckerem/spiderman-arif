@@ -203,6 +203,7 @@ export const tr = {
     sfx: 'Efektler',
     dayLength: 'Gün döngüsü süresi (dakika)',
     fpsCounter: 'FPS göstergesi',
+    crimeEvents: 'Suç olayları',
     on: 'Açık',
     off: 'Kapalı',
     reset: 'Varsayılanlara dön',
@@ -210,6 +211,7 @@ export const tr = {
     groupControls: 'Kontrol',
     groupAudio: 'Ses',
     groupTime: 'Zaman',
+    groupGame: 'Oyun',
     unitDegrees: '°',
     unitTimes: '×',
     unitMinutes: 'dk',
@@ -258,10 +260,10 @@ export const tr = {
   /** Combat (M11): enemy and event names, keyed like `combat/roster.ts` (`ROSTER[kind].key`) and `CrimeEventInfo.type`. */
   combat: {
     enemies: {
-      thug: 'Serseri',
+      thug: 'Sokak Serserisi',
       bat: 'Sopalı',
-      gunman: 'Tetikçi',
-      brute: 'Zırhlı',
+      gunman: 'Silahlı',
+      brute: 'Kalkanlı',
       drone: 'Dron',
       kocbasi: 'Koçbaşı',
       kuzgun: 'Kuzgun',
@@ -274,6 +276,34 @@ export const tr = {
       /** Boss sighting: the boss name goes in place of {name}. */
       boss: '{name} görüldü',
     },
+    /** Event banner title when an event is announced (boss: the name goes in place of {name}). */
+    alerts: {
+      robbery: 'Soygun ihbarı',
+      gang: 'Çete kavgası ihbarı',
+      drones: 'Dron saldırısı ihbarı',
+      boss: '{name} görüldü',
+    },
+    /** Arena types in `AR` order (combat/spawnPoints.ts): where it happens. */
+    places: ['dükkân önü', 'kavşak', 'çatı', 'cadde', 'meydan', 'park', 'iskele'],
+    /** Districts in `D_*` order (world/types.ts). */
+    districts: ['Eski Çarşı', 'Orta Mahalle', 'Kuleler', 'Rıhtım'],
+    park: 'Park',
+    cleared: 'Olay temizlendi!',
+    reward: (focus: number, score: number) => `+${focus} odak · +${score} puan`,
+    expired: 'İhbar zaman aşımına uğradı',
+    expiredSub: 'Kimse gelmedi, suçlular dağıldı',
+    failed: 'Suçlular kaçtı!',
+    failedSub: 'Geç kaldın, ödül yok',
+    left: (n: number) => `${n} düşman kaldı`,
+    distance: (m: string) => `${m} m`,
+    hp: 'SAĞLIK',
+    focus: 'ODAK',
+    score: 'PUAN',
+    combo: 'KOMBO',
+    dodge: 'KAÇ!',
+    takedown: 'BİTİRİŞ',
+    down: 'BAYILDIN',
+    respawnIn: (s: number) => `Bir çatıda kendine geliyorsun: ${s}`,
   },
   /** Fictional in-world signage (world art, kept here with all other text). */
   signs: [

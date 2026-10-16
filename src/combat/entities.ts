@@ -36,6 +36,11 @@ export interface SimEnemy extends Enemy {
   burstAt: number;
   /** Line of sight to the target at the last think (chest to chest). */
   los: boolean;
+  /** Where it came from (`ORIGIN` in crimeEvents.ts): a test hook, a crime event, a roaming pair, or a stray left by a failed event. */
+  origin: number;
+  /** Roaming: patrol loop index (`SpawnPoints.loops`, -1 none) and the distance along it of the point it walks to. */
+  loop: number;
+  loopS: number;
 }
 
 /** Sim-side hero: the shared `CombatHero` plus extrapolation, rate and dodge bookkeeping. */

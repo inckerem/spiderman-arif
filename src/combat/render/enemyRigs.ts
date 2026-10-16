@@ -310,7 +310,7 @@ function buildBat(): RigDef {
   return finish(ARCH.BAT, g, sk, s, 1.0 * s, 1.35 * s);
 }
 
-/** Gunman ("Tetikçi"): long dark coat over a tinted shirt, slick hair, sunglasses, a pistol with a red laser emitter. */
+/** Gunman ("Silahlı"): long dark coat over a tinted shirt, slick hair, sunglasses, a pistol with a red laser emitter. */
 function buildGunman(): RigDef {
   const { scale: s, bulk: b } = OPTS[ARCH.GUNMAN]!;
   const sk = humanoidSkeleton(s);
@@ -335,7 +335,7 @@ function buildGunman(): RigDef {
   return finish(ARCH.GUNMAN, g, sk, s, 1.0 * s, 1.2 * s);
 }
 
-/** Shielded brute ("Zırhlı"): big armoured body, helmet with a glowing visor, hazard stripes (tinted), riot shield on the left forearm. */
+/** Shielded brute ("Kalkanlı"): big armoured body, helmet with a glowing visor, hazard stripes (tinted), riot shield on the left forearm. */
 function buildBrute(): RigDef {
   const { scale: s, bulk: b } = OPTS[ARCH.BRUTE]!;
   const sk = humanoidSkeleton(s);

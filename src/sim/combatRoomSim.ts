@@ -121,6 +121,9 @@ export class CombatRoomSim implements RoomSim {
 
   debug(pid: number, op: DebugOp, a: readonly number[]): void {
     const num = (i: number, d: number): number => (Number.isFinite(a[i]) ? a[i] : d);
+    // Test hooks take the room over: from the first one on, no crime events or roaming pairs spawn on their own.
+    this.sim.scheduler = false;
+    this.sim.roaming = false;
     switch (op) {
       case 'spawn': {
         const kind = Math.trunc(num(0, 0));
@@ -158,6 +161,11 @@ export class CombatRoomSim implements RoomSim {
   }
 }
 
-/** The server's default sim factory: a CombatSim per room on the shared map runtime. */
-export const combatSimFactory: RoomSimFactory = (map: MapRuntime, opts: RoomSimOptions) =>
-  new CombatRoomSim(new CombatSim(map.world, map.layout, map.spawns, opts.seed, { pvp: opts.pvp, maxEnemies: opts.maxEnemies }));
+/** The server's default sim factory: a CombatSim per room on the shared map runtime, with crime events and roaming patrols on. */
+export const combatSimFactory: RoomSimFactory = (map: MapRuntime, opts: RoomSimOptions) => {
+  const sim = new CombatSim(map.world, map.layout, map.spawns, opts.seed, { pvp: opts.pvp, maxEnemies: opts.maxEnemies });
+  sim.scheduler = true;
+  sim.roaming = true;
+  sim.multiplayer = true;
+  return new CombatRoomSim(sim);
+};

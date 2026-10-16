@@ -44,6 +44,7 @@ import { makeHeroState } from './combat/client/link';
 import { fillHeroState } from './combat/client/heroState';
 import { EnemyRenderer } from './combat/render/enemyRenderer';
 import { HeroCombat } from './combat/client/heroCombat';
+import { EventBeacons } from './combat/render/eventBeacons';
 import type { CombatEvent } from './combat/types';
 
 export interface GameOptions {
@@ -157,6 +158,10 @@ export class Game {
   private readonly combatEvents: CombatEvent[] = [];
   /** Called for every combat event this client receives (audio, HUD). */
   onCombatEvent: ((e: CombatEvent) => void) | null = null;
+  /** Light pillars over the active crime events. */
+  beacons!: EventBeacons;
+  /** Settings "Suç olayları": crime events and roaming patrols in single player (never in manual test mode). */
+  crimeEvents = true;
   /** Fixed camera pose for screenshots (tests/photo checks). */
   cameraOverride: { x: number; y: number; z: number; tx: number; ty: number; tz: number; fov: number } | null = null;
 
@@ -216,13 +221,14 @@ export class Game {
     this.combatLink = new LocalCombatLink(this.combatSim, this.combatView);
     this.enemyRender = new EnemyRenderer(this.particles);
     this.heroCombat = new HeroCombat(this.player, this.world, this.combatLink);
+    this.beacons = new EventBeacons();
     this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
     p(0.88, 'shaders');
     this.sky = new Sky(this.opts.seed);
     this.scene.add(this.sky.group);
     this.scene.add(this.visuals.group);
-    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh, this.traffic.mesh, this.peds.mesh, this.rings.mesh, this.rain.mesh, this.enemyRender.group);
+    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh, this.traffic.mesh, this.peds.mesh, this.rings.mesh, this.rain.mesh, this.enemyRender.group, this.beacons.mesh);
     this.scene.fog = new Fog(0xb4dbf6, 300, 2000);
     this.sun = new DirectionalLight(0xffffff, 2.4);
     this.sun.castShadow = true;
@@ -249,6 +255,7 @@ export class Game {
     this.dayNight.apply();
     // Compile every shader during loading so play never hitches on first use (enemies: one of each rig on show).
     this.enemyRender.warmup(this.layout.spawn[0], this.layout.spawn[1], this.layout.spawn[2]);
+    this.beacons.warmup(this.layout.spawn[0], this.layout.spawn[1], this.layout.spawn[2] - 30);
     this.renderer.compile(this.scene, this.rig.camera);
     this.spawn();
     this.applyLifeDensity();
@@ -398,6 +405,12 @@ export class Game {
       this.enemyRender.onEvent(e, this.combatView, this.player.pos, link.renderTime());
       this.onCombatEvent?.(e);
     }
+  }
+
+  /** The "Suç olayları" setting: the scheduler and roaming patrols run in play (manual test mode keeps them off). */
+  setCrimeEvents(on: boolean): void {
+    this.crimeEvents = on;
+    this.combatSim.scheduler = this.combatSim.roaming = on && !this.loop.manual;
   }
 
   /** A fresh combat room: no enemies, full health (a new game, tests). */
@@ -613,6 +626,7 @@ export class Game {
     // Enemies show in play (and photos of it), not behind the menu.
     this.enemyRender.group.visible = this.view !== 'menu';
     if (this.view !== 'menu') this.enemyRender.update(this.combatView, this.rig.camera, this.combatLink.renderTime(), this.combatEnabled ? this.renderPos : null);
+    this.beacons.update(this.view !== 'menu' && this.combatEnabled ? this.combatView.crimes : null, this.rig.camera, this.time);
     shared.uTime.value = this.time;
     const wx = this.weather;
     this.dayNight.storm = wx.mood;

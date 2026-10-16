@@ -18,6 +18,7 @@ import { clamp, clamp01, follow, impulseJob, num } from './dsp';
 import { Bank, Kit } from './kit';
 import { MusicLoop } from './music';
 import * as fx from './sfx';
+import { DroneHum, playCombat, type CombatSound } from './combatSfx';
 
 export interface AudioListenerState {
   /** Player speed m/s (0..90). */
@@ -122,6 +123,7 @@ export class AudioEngine {
   private presenceFade = 0.1;
   private presenceUntil = 0;
   private unlockAt = Number.NEGATIVE_INFINITY;
+  private hum: DroneHum | null = null;
   private hoverAt = Number.NEGATIVE_INFINITY;
   private warned = false;
   private readonly smooth: AmbienceInput = { speed: 0, alt: 0, park: 0, night: 0, water: 0, swing: 0, dive: 0, rain: 0 };
@@ -381,6 +383,26 @@ export class AudioEngine {
 
   photoShutter(): void {
     this.play((k) => fx.photoShutter(k));
+  }
+
+  /** M11 combat one-shots (combatSfx.ts): gain 0..1 (distance), pan -1..1, `param` the combo for hits. */
+  combat(name: CombatSound, gain = 1, pan = 0, param = 0): void {
+    this.play((k) => playCombat(k, name, gain, pan, param));
+  }
+
+  /** The nearest drone's looping whir: level 0..1 (0 fades it out), pan -1..1. Call every frame. */
+  droneHum(level: number, pan: number): void {
+    try {
+      const g = this.graph;
+      if (!g || g.ctx.state !== 'running') return;
+      if (!this.hum) {
+        if (level <= 0.01) return;
+        this.hum = new DroneHum(g.kit, g.sfx);
+      }
+      this.hum.set(this.paused || this.menu ? 0 : level, pan);
+    } catch (e) {
+      this.fail(e);
+    }
   }
 
   getDebugInfo(): AudioDebugInfo {

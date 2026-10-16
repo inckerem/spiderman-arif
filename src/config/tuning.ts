@@ -390,8 +390,24 @@ export const tuning = {
     /** An event expires after this long when no hero came within expireRadius. */
     expireAfter: 240,
     expireRadius: 150,
+    /** Announcement before the wave spawns (the banner and beacon come first). */
+    announceTime: 4,
+    /** Heroes came but did not clear it this long after its start: it fails (its enemies stay as strays, no reward). */
+    failAfter: 300,
+    /** Reward on a clear for every hero that came within expireRadius: focus, and score (base plus per enemy). */
+    rewardFocus: 50,
+    rewardScore: 100,
+    rewardPerEnemy: 25,
+    /** Wave size per extra hero in the room (x(1 + heroScale * (heroes - 1)), at most x3). */
+    heroScale: 0.5,
+    /** Active events at least this far apart (m). */
+    eventSpacing: 120,
     roamMin: 4,
     roamMax: 6,
+    /** First roaming spawn this long after a hero appears, then a check every roamEvery s; patrols walk at roamSpeed. */
+    roamDelay: 3,
+    roamEvery: 1,
+    roamSpeed: 1.4,
     /** Roaming pairs patrol within roamRadius of a hero, spawn beyond roamSpawnMin from every hero and despawn beyond roamDespawn. */
     roamRadius: 250,
     roamSpawnMin: 120,
@@ -664,6 +680,16 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'events.bossEvery': [1, 20, 1],
   'events.expireAfter': [10, 900, 5],
   'events.expireRadius': [10, 500, 5],
+  'events.announceTime': [0, 30, 0.5],
+  'events.failAfter': [30, 1200, 10],
+  'events.rewardFocus': [0, 100, 1],
+  'events.rewardScore': [0, 2000, 10],
+  'events.rewardPerEnemy': [0, 500, 5],
+  'events.heroScale': [0, 2, 0.05],
+  'events.eventSpacing': [0, 500, 10],
+  'events.roamDelay': [0, 60, 0.5],
+  'events.roamEvery': [0.1, 10, 0.1],
+  'events.roamSpeed': [0.5, 5, 0.1],
   'events.roamMin': [0, 20, 1],
   'events.roamMax': [0, 20, 1],
   'events.roamRadius': [50, 600, 10],

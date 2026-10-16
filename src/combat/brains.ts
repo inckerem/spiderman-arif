@@ -34,6 +34,8 @@ export interface BrainHost {
   startTelegraph(e: SimEnemy, atk: number, delay: number, anim?: number, landsIn?: number): void;
   /** Deterministic random number in [0, 1) from the sim's generator. */
   rand(): number;
+  /** Roaming patrol: the point to walk to on its sidewalk loop (false when it has none). */
+  patrolPoint(e: SimEnemy, out: { x: number; z: number }): boolean;
 }
 
 export type Brain = (host: BrainHost, e: SimEnemy, dt: number) => void;
@@ -143,11 +145,22 @@ function acquire(host: BrainHost, e: SimEnemy, keepRange: number): SimHero | und
   return h;
 }
 
-/** No target: back to idle, drifting home when far from it. */
+const patrolPt = { x: 0, z: 0 };
+
+/** No target: back to idle, drifting home when far from it; a roaming enemy walks its patrol loop instead. */
 function idle(host: BrainHost, e: SimEnemy, dt: number, speed: number): void {
   if (e.state !== ES.IDLE && e.state !== ES.PATROL) {
     host.setState(e, ES.IDLE);
     e.flags &= ~EF.ALERTED;
+  }
+  if (host.patrolPoint(e, patrolPt)) {
+    if (e.state !== ES.PATROL) host.setState(e, ES.PATROL);
+    const px = patrolPt.x - e.pos.x,
+      pz = patrolPt.z - e.pos.z;
+    go(host, e, px, pz, Math.min(speed, tuning.events.roamSpeed));
+    faceToward(e, px, pz, dt);
+    host.setAnim(e, ANIM.WALK);
+    return;
   }
   const hx = e.homeX - e.pos.x,
     hz = e.homeZ - e.pos.z;

@@ -1,6 +1,6 @@
 import { tuning } from '../../config/tuning';
 import { PROJ_GRAVITY, PROJ_LIFE } from '../projectiles';
-import { ATK, ES, HERO_ID_BASE, PK, type CombatEvent } from '../types';
+import { ATK, ES, HERO_ID_BASE, HIT, PK, type CombatEvent, type CrimeEventInfo } from '../types';
 import type { CombatDownMsg, CombatSnapshot } from './link';
 
 /** Samples kept per enemy (online snapshots come at 15 Hz and render 0.1 s late: 8 is plenty). */
@@ -152,6 +152,8 @@ export class CombatView {
   threat: ThreatInfo | null = null;
   /** Enemy projectiles in flight. */
   readonly projectiles: ViewProjectile[] = [];
+  /** Active crime events this client knows of (`evStart`, `evProg`, `evEnd`; online also the `welcome` list). */
+  readonly crimes: CrimeEventInfo[] = [];
   private readonly projPool: ViewProjectile[] = [];
   private readonly projThreat: ThreatInfo = { src: 0, atk: 0, at: 0, x: 0, z: 0 };
   /** This hero's feet (set every tick by the hero's combat code; projectile threats need it). */
@@ -307,6 +309,7 @@ export class CombatView {
     this.pending.length = 0;
     this.log.length = 0;
     this.logHead = 0;
+    this.crimes.length = 0;
     const s = this.self;
     s.hp = s.maxHp = tuning.combat.maxHp;
     s.down = false;
@@ -455,6 +458,8 @@ export class CombatView {
           const e = this.byId.get(ev.tgt);
           if (e) e.hp = ev.hp;
         }
+        // A landed hit (any hitter, a KO included) cancels the enemy's wind-up in the room: its threat is gone.
+        if (ev.tgt < HERO_ID_BASE && (ev.fl & HIT.BLOCKED) === 0) this.clearThreat(ev.tgt);
         break;
       case 'miss':
         if (ev.tgt === me) this.clearThreat(ev.src);
@@ -496,9 +501,30 @@ export class CombatView {
           s.hp = s.maxHp;
         }
         break;
+      case 'evStart': {
+        const i = this.crimeIndex(ev.ev.id);
+        if (i >= 0) this.crimes[i] = { ...ev.ev };
+        else this.crimes.push({ ...ev.ev });
+        break;
+      }
+      case 'evProg': {
+        const i = this.crimeIndex(ev.id);
+        if (i >= 0) this.crimes[i]!.enemiesLeft = ev.left;
+        break;
+      }
+      case 'evEnd': {
+        const i = this.crimeIndex(ev.id);
+        if (i >= 0) this.crimes.splice(i, 1);
+        break;
+      }
       default:
         break;
     }
+  }
+
+  private crimeIndex(id: number): number {
+    for (let i = 0; i < this.crimes.length; i++) if (this.crimes[i]!.id === id) return i;
+    return -1;
   }
 
   private addThreat(src: number, atk: number, at: number): void {

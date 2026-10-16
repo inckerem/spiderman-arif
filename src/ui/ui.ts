@@ -11,7 +11,7 @@ import {
   type Settings,
 } from './settings';
 import { Hud } from './hud';
-import { Minimap } from './minimap';
+import { Minimap, type MinimapOverlay } from './minimap';
 import {
   DEFAULT_BINDINGS,
   MOUSE_BUTTONS,
@@ -542,6 +542,16 @@ export class UI {
     this.minimap.setLayout(layout);
   }
 
+  /** A layer shown inside the HUD (it hides with the HUD and fades in the rooftop moment): the M11 combat HUD. */
+  mountHud(node: HTMLElement): void {
+    this.hud.layer.insertBefore(node, this.minimap.el);
+  }
+
+  /** Extra minimap layer (M11: crime events and enemy dots). */
+  setMinimapOverlay(fn: MinimapOverlay | null): void {
+    this.minimap.setOverlay(fn);
+  }
+
   updateMinimap(x: number, z: number, yaw: number, rings: MinimapRing[]): void {
     this.minimap.update(x, z, yaw, rings);
   }
@@ -1015,6 +1025,7 @@ export class UI {
           format: (v) => `${formatInteger(v)} ${S.unitMinutes}`,
         }),
       ]),
+      this.group(S.groupGame, [this.toggleRow('crimeEvents', S.crimeEvents)]),
     );
     const sens = (key: 'sensitivity' | 'touchSensitivity'): SliderSpec => ({
       min: SETTINGS_LIMITS[key].min,

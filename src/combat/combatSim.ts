@@ -6,6 +6,7 @@ import { makeRayHit, type CollisionWorld } from '../physics/collision';
 import { findRespawnRoof, findSafeSpot } from '../physics/safeSpot';
 import type { CityLayout } from '../world/types';
 import { attackStats, BOTTLE_SPEED, BRAINS, type BrainHost } from './brains';
+import { CrimeEvents, ORIGIN, type CrimeHost } from './crimeEvents';
 import type { SimEnemy, SimHero } from './entities';
 import { hashCombat } from './hash';
 import { PosHistory } from './history';
@@ -103,16 +104,20 @@ const aim = { x: 0, y: 0, z: 0 };
  * (chunk 6), (8) hero regeneration and down -> roof respawn, (9) event
  * clear/expire (chunk 7) and KO recycling.
  */
-export class CombatSim implements BrainHost {
+export class CombatSim implements BrainHost, CrimeHost {
   static readonly DT = 1 / 30;
   /** Active enemies (KO'd ones stay `koLinger` seconds, then their pool entry is recycled). */
   readonly enemies: SimEnemy[] = [];
   readonly heroes = new Map<number, SimHero>();
   time = 0;
   steps = 0;
-  /** Crime scheduler and roaming patrols (chunk 7; no effect yet). */
+  /** Crime scheduler and roaming patrols spawn (off by default; the game turns them on in play, server rooms always). */
   scheduler = false;
   roaming = false;
+  /** Online room: crime-event concurrency grows with the players (single player: `events.concurrentSp`). */
+  multiplayer = false;
+  /** Bosses join the crime-event cycle (chunk 8). */
+  bosses = false;
   pvp: boolean;
   readonly rng: Rng;
   readonly mover: GroundMover;
@@ -133,8 +138,10 @@ export class CombatSim implements BrainHost {
   readonly projectiles = new ProjectilePool();
   private readonly ray = makeRayHit();
   private readonly segS = new Float64Array(1);
-  /** Active crime events (chunk 7). */
-  readonly events: CrimeEventInfo[] = [];
+  /** Crime events and roaming patrols. */
+  readonly crime: CrimeEvents;
+  /** Active crime events (the scheduler's replicated infos). */
+  readonly events: CrimeEventInfo[];
 
   constructor(
     readonly world: CollisionWorld,
@@ -154,6 +161,8 @@ export class CombatSim implements BrainHost {
       this.free.push(i);
     }
     for (let i = MAX_HEROES - 1; i >= 0; i--) this.heroSlots.push(i);
+    this.crime = new CrimeEvents(this);
+    this.events = this.crime.list;
   }
 
   // ---------------------------------------------------------------------------
@@ -296,7 +305,35 @@ export class CombatSim implements BrainHost {
   }
 
   hash(): string {
-    return hashCombat(this.time, this.enemies, this.heroes, this.projectiles.list);
+    return hashCombat(this.time, this.enemies, this.heroes, this.projectiles.list, (h) => this.crime.hash(h));
+  }
+
+  /** Copies of the active crime events (the Room's `welcome`). */
+  crimeEvents(out: CrimeEventInfo[]): void {
+    this.crime.snapshot(out);
+  }
+
+  // CrimeHost (the scheduler's view of the sim).
+
+  spawnEnemy(kind: EnemyKind, x: number, y: number, z: number, eventId: number, arena: number): number {
+    return this.debugSpawn(kind, x, y, z, eventId, arena);
+  }
+
+  enemyById(id: number): SimEnemy | undefined {
+    return this.byId.get(id);
+  }
+
+  despawn(e: SimEnemy): void {
+    const i = this.enemies.indexOf(e);
+    if (i >= 0) this.recycle(i);
+  }
+
+  emit(ev: CombatEvent): void {
+    this.out.push(ev);
+  }
+
+  patrolPoint(e: SimEnemy, out: { x: number; z: number }): boolean {
+    return this.crime.patrolPoint(e, out);
   }
 
   // ---------------------------------------------------------------------------
@@ -357,6 +394,9 @@ export class CombatSim implements BrainHost {
     e.circleR = this.rng.range(en.circleMin, en.circleMax);
     e.circleDir = this.rng.chance(0.5) ? 1 : -1;
     e.koAt = 0;
+    e.origin = eventId >= 0 ? ORIGIN.EVENT : ORIGIN.DEBUG;
+    e.loop = -1;
+    e.loopS = 0;
     this.enemies.push(e);
     this.byId.set(id, e);
     this.enemyHist.clear(pi);
@@ -365,9 +405,12 @@ export class CombatSim implements BrainHost {
     return id;
   }
 
-  /** Crime events arrive in chunk 7; until then nothing starts and this returns -1. */
-  startEvent(_type: CrimeEventInfo['type'], _x?: number, _z?: number, _boss?: number): number {
-    return -1;
+  /**
+   * Start a crime event now (test hooks): at the suitable arena nearest (x, z)
+   * when given, else where the scheduler would put it. Returns its id or -1.
+   */
+  startEvent(type: CrimeEventInfo['type'], x?: number, z?: number, boss?: number): number {
+    return this.crime.start(type, x, z, boss);
   }
 
   /** Test hook: set a hero's health (0 knocks it down at the next step). */
@@ -390,6 +433,8 @@ export class CombatSim implements BrainHost {
     // Projectiles in flight end where they are (clients drop them on `projEnd`).
     for (const p of this.projectiles.list) this.out.push({ e: 'projEnd', id: p.id, x: p.x, y: p.y, z: p.z, tgt: -1 });
     this.projectiles.clear();
+    // Crime events and their timers start over (the views drop the events on their `evEnd`).
+    this.crime.reset();
   }
 
   // ---------------------------------------------------------------------------
@@ -421,7 +466,8 @@ export class CombatSim implements BrainHost {
     }
     this.queue.length = 0;
 
-    // (3) Scheduler and roaming: chunk 7.
+    // (3) Crime scheduler and roaming spawns.
+    this.crime.schedule();
 
     // (4) Brains.
     for (const e of this.enemies) {
@@ -467,7 +513,8 @@ export class CombatSim implements BrainHost {
       if (h.hp < h.maxHp && t - h.lastHurt >= c.regenDelay) h.hp = Math.min(h.maxHp, h.hp + c.regenRate * dt);
     }
 
-    // (9) Events: chunk 7. KO'd enemies leave after their linger time.
+    // (9) Crime events: clear, expire, fail; far roamers leave. KO'd enemies leave after their linger time.
+    this.crime.lifecycle();
     const linger = tuning.enemies.koLinger;
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i]!;
@@ -1213,6 +1260,7 @@ export class CombatSim implements BrainHost {
     e.vel.set(kx, ky, kz);
     if (ky > 0 || kindInfo(e.kind).flyer) e.grounded = false;
     this.out.push({ e: 'hit', src, tgt: e.id, move, dmg, hp: 0, fl: HIT.KO | HIT.KNOCKDOWN, kx, ky, kz });
+    this.crime.onKo(e, src);
   }
 
   private yank(h: SimHero, e: SimEnemy, hx: number, hy: number, hz: number): void {
@@ -1346,6 +1394,9 @@ function makeEnemy(pi: number): SimEnemy {
     nextShot: 0,
     burstAt: 0,
     los: false,
+    origin: 0,
+    loop: -1,
+    loopS: 0,
   };
 }
 

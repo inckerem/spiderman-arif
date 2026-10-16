@@ -202,7 +202,13 @@ export interface CrimeEventInfo {
   radius: number;
   enemiesLeft: number;
   startedAt: number;
+  /** Arena id (`SpawnPoints.arenas`; the same on every client of a map) and the wave size. */
+  arena: number;
+  total: number;
 }
+
+/** How a crime event ended: all its enemies KO'd, nobody came in time, or the heroes came but ran out of time. */
+export type CrimeEventResult = 'clear' | 'expire' | 'fail';
 
 export type CombatEvent =
   | { e: 'tele'; src: number; tgt: number; atk: number; at: number }
@@ -220,6 +226,9 @@ export type CombatEvent =
   /** Enemy spawned (replicated reliably; snapshots carry the motion). */
   | { e: 'spawn'; id: number; kind: number; x: number; y: number; z: number }
   | { e: 'evStart'; ev: CrimeEventInfo }
-  | { e: 'evEnd'; id: number; result: 'clear' | 'expire' }
+  /** A crime event's enemies still standing (after a KO, or when its wave spawns). */
+  | { e: 'evProg'; id: number; left: number }
+  /** A crime event ended; on a clear the heroes in `pids` (those who came) got `focus` and `score`. */
+  | { e: 'evEnd'; id: number; result: CrimeEventResult; pids: number[]; focus: number; score: number }
   | { e: 'boss'; id: number; phase: number }
   | { e: 'rej'; pid: number; seq: number; why: RejectReason };

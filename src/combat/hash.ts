@@ -39,7 +39,14 @@ export class StateHash {
   }
 }
 
-export function hashCombat(time: number, enemies: readonly Enemy[], heroes: ReadonlyMap<number, CombatHero>, projectiles: readonly Projectile[] = []): string {
+/** `extra` adds more sim state (the crime scheduler) to the digest. */
+export function hashCombat(
+  time: number,
+  enemies: readonly Enemy[],
+  heroes: ReadonlyMap<number, CombatHero>,
+  projectiles: readonly Projectile[] = [],
+  extra?: (h: StateHash) => void,
+): string {
   const h = new StateHash();
   h.num(time, 1e6).int(enemies.length);
   for (const e of enemies) {
@@ -55,5 +62,6 @@ export function hashCombat(time: number, enemies: readonly Enemy[], heroes: Read
   }
   h.int(projectiles.length);
   for (const p of projectiles) h.int(p.id).int(p.kind).int(p.src).int(p.tgt).num(p.x).num(p.y).num(p.z).num(p.vx).num(p.vy).num(p.vz);
+  extra?.(h);
   return h.hex();
 }

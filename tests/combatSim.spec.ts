@@ -1250,3 +1250,249 @@ test('combat sim: a mixed roster is deterministic and stays out of geometry', ()
   expect(a.events).toBeGreaterThan(50);
   expect(a.msPerStep).toBeLessThan(2);
 });
+
+// --- Crime events and roaming (M11 chunk 7) ---
+
+/** Temporarily changed `tuning.events` values, restored by the returned function. */
+function withEvents(over: Partial<typeof tuning.events>): () => void {
+  const saved = { ...tuning.events };
+  Object.assign(tuning.events, over);
+  return () => Object.assign(tuning.events, saved);
+}
+
+/** A street-level spot in the middle of the island (an intersection centre). */
+function midSpot(): { x: number; y: number; z: number } {
+  const w = world();
+  const L = w.layout.land;
+  const cx = (L.minX + L.maxX) / 2,
+    cz = (L.minZ + L.maxZ) / 2;
+  let best = w.spawns.arenas[w.spawns.byType[AR.INTERSECTION]![0]!]!;
+  for (const id of w.spawns.byType[AR.INTERSECTION]!) {
+    const a = w.spawns.arenas[id]!;
+    if (Math.hypot(a.x - cx, a.z - cz) < Math.hypot(best.x - cx, best.z - cz)) best = a;
+  }
+  return { x: best.x, y: best.y, z: best.z };
+}
+
+type EvStart = Extract<CombatEvent, { e: 'evStart' }>;
+type EvEnd = Extract<CombatEvent, { e: 'evEnd' }>;
+
+/** Step a sim `n` times with heroes standing at their spots (re-sampled every step); returns every event. */
+function run(sim: CombatSim, n: number, heroes: Array<{ pid: number; x: number; y: number; z: number }>): CombatEvent[] {
+  const all: CombatEvent[] = [];
+  for (let s = 0; s < n; s++) {
+    for (const h of heroes) hero(sim, h.pid, h.x, h.y, h.z);
+    sim.step();
+    sim.drainEvents(all);
+  }
+  return all;
+}
+
+test('crime events: the scheduler announces events in reach, spawns the wave, caps concurrency and scales with heroes', () => {
+  const restore = withEvents({});
+  try {
+    const w = world();
+    const m = midSpot();
+    const E = tuning.events;
+    const sim = makeSim(11);
+    sim.scheduler = true;
+    // Nothing before firstDelay; then an announcement at a suitable arena in the distance band.
+    let evs = run(sim, Math.round((E.firstDelay - 1) / DT), [{ pid: 1, ...m }]);
+    expect(evs.some((e) => e.e === 'evStart')).toBe(false);
+    evs = run(sim, Math.round(2 / DT), [{ pid: 1, ...m }]);
+    const st = evs.find((e) => e.e === 'evStart') as EvStart | undefined;
+    expect(st).toBeTruthy();
+    const ev = st!.ev;
+    const a = w.spawns.arenas[ev.arena]!;
+    const d = Math.hypot(ev.x - m.x, ev.z - m.z);
+    expect(d).toBeGreaterThanOrEqual(E.distMin * 0.5);
+    expect(d).toBeLessThanOrEqual(E.distMax * 1.5);
+    expect(arenaTypesFor(ev.type).includes(a.type)).toBe(true);
+    expect(arenaSuits(a, ev.type)).toBe(true);
+    expect(sim.events.length).toBe(1);
+    // Announced: no wave yet. After announceTime: the wave, tagged with the event, and the count.
+    expect(sim.enemies.filter((e) => e.eventId === ev.id).length).toBe(0);
+    evs = run(sim, Math.round((E.announceTime + 0.5) / DT), [{ pid: 1, ...m }]);
+    const wave = sim.enemies.filter((e) => e.eventId === ev.id);
+    const prog = evs.filter((e) => e.e === 'evProg') as Array<Extract<CombatEvent, { e: 'evProg' }>>;
+    expect(wave.length).toBe(ev.total);
+    expect(prog[0]).toMatchObject({ id: ev.id, left: wave.length });
+    for (const e of wave) expect(Math.hypot(e.pos.x - ev.x, e.pos.z - ev.z)).toBeLessThan(a.radius + 12);
+    const kinds = wave.map((e) => e.kind).sort();
+    if (ev.type === 'robbery') expect(kinds.filter((k) => k === EK.GUNMAN).length).toBeGreaterThanOrEqual(1);
+    if (ev.type === 'drones') expect(kinds.filter((k) => k === EK.DRONE).length).toBeGreaterThanOrEqual(4);
+    if (ev.type === 'gang') expect(kinds.includes(EK.BRUTE)).toBe(true);
+
+    // Cap: with a 1 s gap the scheduler never runs more than concurrentSp at once in single player.
+    Object.assign(tuning.events, { gapMin: 1, gapMax: 1 });
+    let maxActive = 0;
+    const capSim = makeSim(12);
+    capSim.scheduler = true;
+    for (let s = 0; s < Math.round((E.firstDelay + 40) / DT); s++) {
+      hero(capSim, 1, m.x, m.y, m.z);
+      capSim.step();
+      capSim.drainEvents([]);
+      maxActive = Math.max(maxActive, capSim.events.length);
+    }
+    expect(maxActive).toBe(E.concurrentSp);
+    // Online: 1 + players / playersPerExtra, at most concurrentMp.
+    const mp = makeSim(13, false, 60);
+    mp.multiplayer = true;
+    expect(mp.crime.cap()).toBe(1);
+    for (let p = 1; p <= 8; p++) hero(mp, p, m.x + p, m.y, m.z);
+    expect(mp.crime.cap()).toBe(Math.min(E.concurrentMp, 1 + Math.floor(8 / E.playersPerExtra)));
+    for (let p = 9; p <= 16; p++) hero(mp, p, m.x + p, m.y, m.z);
+    expect(mp.crime.cap()).toBe(E.concurrentMp);
+
+    // Hero-count scaling: the same robbery for 1 hero and for 4.
+    const sizes = [1, 4].map((n) => {
+      const s2 = makeSim(14, false, 60);
+      for (let p = 1; p <= n; p++) hero(s2, p, m.x + p, m.y, m.z);
+      const id = s2.startEvent('robbery', m.x, m.z);
+      expect(id).toBeGreaterThan(0);
+      return s2.events[0]!.total;
+    });
+    console.log('crime events: first', JSON.stringify({ type: ev.type, d: Math.round(d), total: ev.total, maxActive, sizes }));
+    expect(sizes[0]).toBeGreaterThanOrEqual(4);
+    expect(sizes[0]).toBeLessThanOrEqual(5);
+    expect(sizes[1]! / sizes[0]!).toBeGreaterThan(2);
+    // Scheduler off: no events and no Rng draws (same hash as a sim that never had it on).
+    const off = makeSim(15);
+    const ref = makeSim(15);
+    off.scheduler = true;
+    off.scheduler = false;
+    run(off, 900, [{ pid: 1, ...m }]);
+    run(ref, 900, [{ pid: 1, ...m }]);
+    expect(off.events.length).toBe(0);
+    expect(off.hash()).toBe(ref.hash());
+  } finally {
+    restore();
+  }
+});
+
+test('crime events: clear rewards the heroes that came, expire and fail', () => {
+  const restore = withEvents({ announceTime: 2, expireAfter: 20, failAfter: 30 });
+  try {
+    const m = midSpot();
+    const E = tuning.events;
+    // Clear: a robbery next to the hero, every enemy KO'd.
+    const sim = makeSim(21);
+    hero(sim, 1, m.x, m.y, m.z);
+    const id = sim.startEvent('robbery', m.x, m.z);
+    const ev = sim.events[0]!;
+    const near = { pid: 1, x: ev.x, y: ev.y, z: ev.z + 3 };
+    let evs = run(sim, Math.round(2.5 / DT), [near]);
+    expect(sim.enemies.filter((e) => e.eventId === id).length).toBe(ev.total);
+    const focus0 = sim.hero(1)!.focus;
+    sim.debugKillAll();
+    evs = run(sim, 2, [near]);
+    const prog = evs.filter((e) => e.e === 'evProg') as Array<Extract<CombatEvent, { e: 'evProg' }>>;
+    const end = evs.find((e) => e.e === 'evEnd') as EvEnd;
+    expect(prog.length).toBeGreaterThan(0);
+    expect(end).toMatchObject({ id, result: 'clear', pids: [1], focus: E.rewardFocus });
+    expect(end.score).toBe(E.rewardScore + E.rewardPerEnemy * ev.total);
+    expect(sim.hero(1)!.focus).toBe(Math.min(100, focus0 + E.rewardFocus));
+    expect(sim.events.length).toBe(0);
+
+    // Expire: nobody comes within expireRadius in expireAfter; its enemies vanish.
+    const ex = makeSim(22);
+    const far = { pid: 1, x: m.x, y: m.y, z: m.z };
+    hero(ex, 1, far.x, far.y, far.z);
+    const exId = ex.startEvent('gang', m.x + 400, m.z);
+    const exEv = ex.events[0]!;
+    expect(Math.hypot(exEv.x - m.x, exEv.z - m.z)).toBeGreaterThan(E.expireRadius);
+    evs = run(ex, Math.round((E.expireAfter + 1) / DT), [far]);
+    expect(evs.find((e) => e.e === 'evEnd')).toMatchObject({ id: exId, result: 'expire', pids: [], score: 0 });
+    expect(ex.enemies.filter((e) => e.eventId === exId).length).toBe(0);
+    expect(ex.enemies.length).toBe(0);
+
+    // Fail: the hero came but the clock ran out; the enemies stay as strays (no event, no arena).
+    const fa = makeSim(23);
+    hero(fa, 1, m.x, m.y, m.z);
+    const faId = fa.startEvent('robbery', m.x + 300, m.z);
+    const faEv = fa.events[0]!;
+    const visit = { pid: 1, x: faEv.x, y: faEv.y + 30, z: faEv.z }; // above it (out of the fight)
+    evs = run(fa, Math.round((E.failAfter + 1) / DT), [visit]);
+    const faEnd = evs.find((e) => e.e === 'evEnd') as EvEnd;
+    expect(faEnd).toMatchObject({ id: faId, result: 'fail', pids: [1], focus: 0, score: 0 });
+    const strays = fa.enemies.filter((e) => e.state !== ES.KO);
+    expect(strays.length).toBeGreaterThan(0);
+    expect(strays.every((e) => e.eventId === -1 && e.arena === -1)).toBe(true);
+    // Strays far from every hero leave.
+    evs = run(fa, 3, [{ pid: 1, x: faEv.x + E.roamDespawn + 200, y: faEv.y, z: faEv.z }]);
+    expect(fa.enemies.filter((e) => e.state !== ES.KO).length).toBe(0);
+    console.log('crime events: lifecycle', JSON.stringify({ clear: end, expire: exId, fail: faEnd.result }));
+  } finally {
+    restore();
+  }
+});
+
+test('crime events: roaming thug pairs patrol sidewalk loops, spawn out of sight and leave far away', () => {
+  const m = midSpot();
+  const E = tuning.events;
+  const sim = makeSim(31);
+  sim.roaming = true;
+  const evs = run(sim, Math.round(20 / DT), [{ pid: 1, ...m }]);
+  const spawns = evs.filter((e) => e.e === 'spawn') as Array<Extract<CombatEvent, { e: 'spawn' }>>;
+  const roamers = sim.enemies.filter((e) => e.loop >= 0);
+  expect(roamers.length).toBeGreaterThanOrEqual(E.roamMin);
+  expect(roamers.length).toBeLessThanOrEqual(E.roamMax);
+  expect(roamers.length % 2).toBe(0);
+  expect(roamers.every((e) => e.kind === EK.THUG)).toBe(true);
+  for (const s of spawns) expect(Math.hypot(s.x - m.x, s.z - m.z)).toBeGreaterThanOrEqual(E.roamSpawnMin - 0.01);
+  for (const e of roamers) expect(Math.hypot(e.pos.x - m.x, e.pos.z - m.z)).toBeLessThan(E.roamRadius + 60);
+  // They walk their loops (patrol state, moving at about roamSpeed).
+  const before = roamers.map((e) => [e.pos.x, e.pos.z]);
+  run(sim, Math.round(5 / DT), [{ pid: 1, ...m }]);
+  const moved = roamers.map((e, i) => Math.hypot(e.pos.x - before[i]![0]!, e.pos.z - before[i]![1]!));
+  expect(roamers.filter((e) => e.state === ES.PATROL).length).toBeGreaterThan(0);
+  expect(Math.max(...moved)).toBeGreaterThan(E.roamSpeed * 5 * 0.5);
+  // The hero leaves: they despawn beyond roamDespawn, and new pairs come around the new spot.
+  const w = world();
+  const L = w.layout.land;
+  const away = { pid: 1, x: m.x + (m.x > (L.minX + L.maxX) / 2 ? -1 : 1) * (E.roamDespawn + 250), y: m.y, z: m.z };
+  run(sim, 3, [away]);
+  expect(sim.enemies.filter((e) => e.loop >= 0 && Math.hypot(e.pos.x - away.x, e.pos.z - away.z) > E.roamDespawn).length).toBe(0);
+  run(sim, Math.round(10 / DT), [away]);
+  expect(sim.enemies.filter((e) => e.loop >= 0).length).toBeGreaterThan(0);
+  console.log('crime events: roaming', JSON.stringify({ roamers: roamers.length, maxMoved: Math.max(...moved) }));
+});
+
+test('crime events: scheduler and roaming are deterministic (the hash covers the scheduler)', () => {
+  const restore = withEvents({ gapMin: 5, gapMax: 10, announceTime: 2 });
+  try {
+    const m = midSpot();
+    const go = (seed: number) => {
+      const sim = makeSim(seed, false, 30);
+      sim.scheduler = true;
+      sim.roaming = true;
+      const hashes: string[] = [];
+      let starts = 0,
+        nan = 0;
+      const buf: CombatEvent[] = [];
+      for (let s = 0; s < 30 * 75; s++) {
+        // The hero walks a slow circle; now and then it KOs the nearest event enemy (killAll every 20 s).
+        const a = s * DT * 0.05;
+        hero(sim, 1, m.x + Math.cos(a) * 30, m.y, m.z + Math.sin(a) * 30);
+        if (s % 600 === 599) sim.debugKillAll();
+        sim.step();
+        buf.length = 0;
+        sim.drainEvents(buf);
+        starts += buf.filter((e) => e.e === 'evStart').length;
+        for (const e of sim.enemies) if (!Number.isFinite(e.pos.x + e.pos.y + e.pos.z)) nan++;
+        if (s % 30 === 29) hashes.push(sim.hash());
+      }
+      return { hashes, starts, nan, enemies: sim.enemies.length };
+    };
+    const a = go(51);
+    const b = go(51);
+    const c = go(52);
+    console.log('crime events: determinism', JSON.stringify({ starts: a.starts, enemies: a.enemies, c: c.starts }));
+    expect(b.hashes).toEqual(a.hashes);
+    expect(c.hashes[c.hashes.length - 1]).not.toBe(a.hashes[a.hashes.length - 1]);
+    expect(a.starts).toBeGreaterThanOrEqual(2);
+    expect(a.nan).toBe(0);
+  } finally {
+    restore();
+  }
+});

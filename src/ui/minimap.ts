@@ -37,6 +37,9 @@ const B_HIGH: [number, number, number] = [244, 239, 230];
 /** Ring marker colour per route index (park, towers, waterfront). */
 const ROUTE_COLORS = ['#7ddc8f', '#f4efe6', '#5ec8ea'];
 
+/** Draws in map pixels: world (x, z) maps to (R + (dx cos - dz sin) k, R + (dx sin + dz cos) k), dx = x - px, dz = z - pz; `u` = size unit. */
+export type MinimapOverlay = (g: CanvasRenderingContext2D, R: number, k: number, cos: number, sin: number, u: number, px: number, pz: number) => void;
+
 interface Extent {
   minX: number;
   minZ: number;
@@ -214,6 +217,8 @@ export class Minimap {
   private dpr = 1;
   private headFont = 'sans-serif';
   private visible = false;
+  /** Extra layer drawn over the map, under the north marker and the player (M11: combat events and enemies). */
+  private overlay: MinimapOverlay | null = null;
   private px = 0;
   private pz = 0;
   private yaw = 0;
@@ -263,6 +268,10 @@ export class Minimap {
     if (v === this.visible) return;
     this.visible = v;
     if (v) this.draw();
+  }
+
+  setOverlay(fn: MinimapOverlay | null): void {
+    this.overlay = fn;
   }
 
   update(x: number, z: number, yaw: number, rings: readonly MinimapRing[]): void {
@@ -347,6 +356,8 @@ export class Minimap {
     g.arc(R, R, R * 0.92, -Math.PI / 2 - CONE_HALF, -Math.PI / 2 + CONE_HALF);
     g.closePath();
     g.fill();
+
+    this.overlay?.(g, R, k, cos, sin, u, this.px, this.pz);
 
     // North marker first so ring markers near the rim stay on top of it.
     this.drawNorth(g, R, cos, sin, u);

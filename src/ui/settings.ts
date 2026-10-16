@@ -30,6 +30,8 @@ export interface Settings {
   /** Real-time minutes for one full day-night cycle, 2..60. */
   dayLengthMinutes: number;
   showFps: boolean;
+  /** Crime events and roaming patrols in single player (M11). */
+  crimeEvents: boolean;
   /** Key and mouse bindings (see src/input/bindings.ts); replaced, never mutated. */
   bindings: Bindings;
   /** Hero costume (src/character/costumes.ts). */
@@ -52,7 +54,7 @@ export const SETTINGS_LIMITS = {
 } as const;
 
 export type NumericSettingKey = keyof typeof SETTINGS_LIMITS;
-export type BooleanSettingKey = 'dynamicResolution' | 'invertY' | 'cameraFollow' | 'showFps';
+export type BooleanSettingKey = 'dynamicResolution' | 'invertY' | 'cameraFollow' | 'showFps' | 'crimeEvents';
 
 /** Frozen at runtime so nothing can mutate the defaults by accident. */
 export const DEFAULT_SETTINGS: Settings = Object.freeze<Settings>({
@@ -69,6 +71,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze<Settings>({
   sfxVolume: 0.8,
   dayLengthMinutes: 12,
   showFps: false,
+  crimeEvents: true,
   bindings: DEFAULT_BINDINGS,
   costume: DEFAULT_COSTUME,
 });
@@ -119,6 +122,7 @@ export function sanitizeSettings(data: unknown): Settings {
     sfxVolume: num('sfxVolume'),
     dayLengthMinutes: num('dayLengthMinutes'),
     showFps: boolOr(o.showFps, d.showFps),
+    crimeEvents: boolOr(o.crimeEvents, d.crimeEvents),
     bindings: sanitizeBindings(o.bindings),
     costume: isCostumeId(o.costume) ? o.costume : d.costume,
   };

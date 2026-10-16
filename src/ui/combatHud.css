@@ -1,0 +1,766 @@
+/*
+ * Combat HUD (M11): health and focus, combo, spider-sense, target bar,
+ * event marker and banner, knocked-out overlay. Same comic look as the
+ * main HUD (ink outlines, hard shadows, skewed panels). Lives inside
+ * .sk-hud, so it shows with the HUD and fades out in the rooftop moment.
+ */
+
+.sk-ch {
+  --sk-ch-robbery: #ffb020;
+  --sk-ch-gang: #ff5a4a;
+  --sk-ch-drones: #4fd6ff;
+  --sk-ch-boss: #c37bff;
+  --sk-ch-hp: #ff4f5e;
+  --sk-ch-regen: #7ddc8f;
+  --sk-ch-focus: #4fd6ff;
+  position: absolute;
+  inset: 0;
+  display: none;
+  pointer-events: none;
+}
+
+.sk-ch.is-on {
+  display: block;
+}
+
+/* ------------------------------------------------ health, focus, score */
+
+.sk-ch-vitals {
+  position: absolute;
+  left: 2rem;
+  bottom: 9.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.55rem 1.1rem 0.6rem 0.9rem;
+  isolation: isolate;
+  contain: layout style;
+}
+
+.sk-ch-vitals::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 3px solid var(--sk-ink);
+  background-color: var(--sk-charcoal);
+  background-image: var(--sk-dots-light);
+  background-size: 6px 6px;
+  box-shadow: 5px 5px 0 var(--sk-ink);
+  transform: skewX(-8deg);
+}
+
+.sk-ch-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sk-ch-label {
+  display: inline-block;
+  min-width: 4.4em;
+  padding: 0.16rem 0.4rem 0.1rem;
+  border: 2px solid var(--sk-ink);
+  background: var(--sk-ch-hp);
+  color: var(--sk-ink);
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.7rem;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-align: center;
+  transform: skewX(-10deg);
+}
+
+.sk-ch-flabel {
+  background: var(--sk-ch-focus);
+}
+
+.sk-ch-hp {
+  position: relative;
+  width: 13.5rem;
+  height: 1.05rem;
+  transform: skewX(-18deg);
+}
+
+.sk-ch-hp-ghost {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 244, 220, 0.85);
+  transform-origin: 0 50%;
+}
+
+.sk-ch-segs {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  gap: 3px;
+}
+
+.sk-ch-seg {
+  position: relative;
+  flex: 1 1 0;
+  border: 2px solid var(--sk-ink);
+  background: rgba(17, 17, 17, 0.55);
+  overflow: hidden;
+}
+
+.sk-ch-seg-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--sk-ch-hp);
+  transform-origin: 0 50%;
+}
+
+.sk-ch-vitals.is-regen .sk-ch-seg-fill {
+  background: linear-gradient(90deg, var(--sk-ch-hp) 0%, var(--sk-ch-hp) 55%, var(--sk-ch-regen) 100%);
+}
+
+.sk-ch-vitals.is-regen .sk-ch-label:not(.sk-ch-flabel) {
+  background: var(--sk-ch-regen);
+}
+
+.sk-ch-vitals.is-low .sk-ch-seg {
+  animation: sk-ch-low 0.7s ease-in-out infinite alternate;
+}
+
+@keyframes sk-ch-low {
+  from {
+    border-color: var(--sk-ink);
+  }
+  to {
+    border-color: #ffe2a3;
+  }
+}
+
+.sk-ch-num {
+  min-width: 2.6ch;
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 1.35rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--sk-paper);
+  -webkit-text-stroke: 0.08em var(--sk-ink);
+  paint-order: stroke fill;
+}
+
+.sk-ch-focus {
+  position: relative;
+  width: 9rem;
+  height: 0.62rem;
+  border: 2px solid var(--sk-ink);
+  background: rgba(17, 17, 17, 0.55);
+  overflow: hidden;
+  transform: skewX(-18deg);
+}
+
+.sk-ch-focus-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--sk-ch-focus);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+}
+
+.sk-ch-focus.is-full .sk-ch-focus-fill {
+  background: repeating-linear-gradient(90deg, var(--sk-ch-focus) 0 0.5rem, #e6fbff 0.5rem 0.75rem);
+  animation: sk-ch-ready 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes sk-ch-ready {
+  to {
+    filter: brightness(1.35);
+  }
+}
+
+.sk-ch-fkey {
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  color: var(--sk-ch-focus);
+  -webkit-text-stroke: 0.06em var(--sk-ink);
+  paint-order: stroke fill;
+  white-space: nowrap;
+}
+
+.sk-ch-score {
+  display: none;
+  align-items: baseline;
+  gap: 0.3rem;
+  margin-left: auto;
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  white-space: nowrap;
+}
+
+.sk-ch-vitals.has-score .sk-ch-score {
+  display: inline-flex;
+}
+
+.sk-ch-score-label {
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  color: var(--sk-amber);
+}
+
+.sk-ch-score-num {
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--sk-paper);
+}
+
+/* ------------------------------------------------ combo */
+
+.sk-ch-combo {
+  --p: 100%;
+  position: absolute;
+  left: calc(50% + 3.4rem);
+  top: calc(50% - 4.6rem);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  width: 4.4rem;
+  height: 4.4rem;
+  justify-content: center;
+}
+
+.sk-ch-combo.is-on {
+  display: flex;
+}
+
+.sk-ch-combo.is-pop {
+  animation: sk-ch-pop 0.22s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+
+@keyframes sk-ch-pop {
+  from {
+    transform: scale(1.35) rotate(-6deg);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.sk-ch-combo-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(var(--sk-amber) var(--p), rgba(17, 17, 17, 0.35) 0);
+  -webkit-mask: radial-gradient(circle, transparent 57%, #000 59%);
+  mask: radial-gradient(circle, transparent 57%, #000 59%);
+  filter: drop-shadow(2px 2px 0 var(--sk-ink));
+}
+
+.sk-ch-combo-num {
+  position: relative;
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 1.75rem;
+  line-height: 0.95;
+  color: var(--sk-amber);
+  -webkit-text-stroke: 0.09em var(--sk-ink);
+  paint-order: stroke fill;
+  text-shadow: 0.05em 0.05em 0 var(--sk-ink);
+}
+
+.sk-ch-combo-label {
+  position: relative;
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.6rem;
+  letter-spacing: 0.16em;
+  color: var(--sk-paper);
+  -webkit-text-stroke: 0.05em var(--sk-ink);
+  paint-order: stroke fill;
+}
+
+/* ------------------------------------------------ spider-sense and dodge prompt */
+
+.sk-ch-sense {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.sk-ch-sense.is-on {
+  display: block;
+}
+
+.sk-ch-sense-rot {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.sk-ch-chev {
+  position: absolute;
+  left: -0.9rem;
+  width: 1.8rem;
+  height: 0.9rem;
+  background: rgba(255, 106, 85, 0.6);
+  clip-path: polygon(50% 0, 100% 100%, 78% 100%, 50% 42%, 22% 100%, 0 100%);
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+}
+
+.sk-ch-chev-a {
+  top: -4.6rem;
+}
+
+.sk-ch-chev-b {
+  top: -3.8rem;
+  opacity: 0.7;
+}
+
+.sk-ch-sense.is-now .sk-ch-chev {
+  background: #ff3b30;
+  animation: sk-ch-sense 0.18s ease-in-out infinite alternate;
+}
+
+@keyframes sk-ch-sense {
+  to {
+    transform: translateY(-0.35rem) scale(1.15);
+    background: #fff2c7;
+  }
+}
+
+.sk-ch-dodge {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 3.2rem);
+  display: none;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.25rem 0.75rem 0.2rem;
+  border: 3px solid var(--sk-ink);
+  background: #ff3b30;
+  box-shadow: 4px 4px 0 var(--sk-ink);
+  transform: translateX(-50%) skewX(-10deg);
+}
+
+.sk-ch-dodge.is-on {
+  display: flex;
+  animation: sk-ch-dodge 0.16s ease-out;
+}
+
+@keyframes sk-ch-dodge {
+  from {
+    transform: translateX(-50%) skewX(-10deg) scale(1.4);
+  }
+}
+
+.sk-ch-dodge-text {
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 1.25rem;
+  letter-spacing: 0.06em;
+  color: var(--sk-paper);
+  -webkit-text-stroke: 0.06em var(--sk-ink);
+  paint-order: stroke fill;
+}
+
+.sk-ch-dodge-key {
+  padding: 0.12rem 0.4rem 0.06rem;
+  border: 2px solid var(--sk-ink);
+  background: var(--sk-paper);
+  color: var(--sk-ink);
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+}
+
+/* ------------------------------------------------ target bar */
+
+.sk-ch-target {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  will-change: transform;
+}
+
+.sk-ch-target.is-on {
+  display: block;
+}
+
+.sk-ch-target-name,
+.sk-ch-target-bar {
+  position: absolute;
+  left: 0;
+  transform: translateX(-50%);
+}
+
+.sk-ch-target-name {
+  bottom: 0.85rem;
+  white-space: nowrap;
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.86rem;
+  letter-spacing: 0.06em;
+  color: var(--sk-paper);
+  -webkit-text-stroke: 0.08em var(--sk-ink);
+  paint-order: stroke fill;
+}
+
+.sk-ch-target-bar {
+  bottom: 0.15rem;
+  width: 6.4rem;
+  height: 0.55rem;
+  margin-left: -3.2rem;
+  border: 2px solid var(--sk-ink);
+  background: rgba(17, 17, 17, 0.6);
+  overflow: hidden;
+  transform: skewX(-18deg);
+}
+
+.sk-ch-target-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--sk-ch-hp);
+  transform-origin: 0 50%;
+}
+
+.sk-ch-target.is-guard .sk-ch-target-bar {
+  border-color: #9fd3ff;
+  box-shadow: 0 0 0 2px var(--sk-ink);
+}
+
+/* ------------------------------------------------ event marker */
+
+.sk-ch-marker {
+  --c: var(--sk-ch-robbery);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  will-change: transform;
+}
+
+.sk-ch-marker.is-on {
+  display: block;
+}
+
+.sk-ch-marker.is-gang {
+  --c: var(--sk-ch-gang);
+}
+
+.sk-ch-marker.is-drones {
+  --c: var(--sk-ch-drones);
+}
+
+.sk-ch-marker.is-boss {
+  --c: var(--sk-ch-boss);
+}
+
+.sk-ch-marker-pin {
+  position: absolute;
+  left: -0.7rem;
+  top: -0.7rem;
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 3px solid var(--sk-ink);
+  background: var(--c);
+  transform: rotate(45deg);
+  box-shadow: 3px 3px 0 var(--sk-ink);
+  animation: sk-ch-pin 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes sk-ch-pin {
+  to {
+    transform: rotate(45deg) scale(1.2);
+  }
+}
+
+.sk-ch-marker-text {
+  position: absolute;
+  left: 0;
+  top: 1.05rem;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 0.14rem 0.5rem 0.08rem;
+  border: 2px solid var(--sk-ink);
+  background: var(--sk-charcoal);
+  color: var(--sk-paper);
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.82rem;
+  letter-spacing: 0.05em;
+  box-shadow: 3px 3px 0 var(--sk-ink);
+}
+
+.sk-ch-marker-arrow {
+  position: absolute;
+  left: -0.9rem;
+  top: -0.9rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  display: none;
+}
+
+.sk-ch-marker-arrow::before {
+  content: '';
+  position: absolute;
+  left: 0.35rem;
+  top: -1.35rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  background: var(--c);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000);
+}
+
+.sk-ch-marker.is-off .sk-ch-marker-arrow {
+  display: block;
+}
+
+/* ------------------------------------------------ objective chip (at an event) */
+
+.sk-ch-obj {
+  --c: var(--sk-ch-robbery);
+  position: absolute;
+  left: 2rem;
+  top: 1.4rem;
+  display: none;
+  padding: 0.35rem 1rem 0.3rem 0.9rem;
+  isolation: isolate;
+}
+
+.sk-ch-obj.is-on {
+  display: block;
+}
+
+.sk-ch-obj.is-gang {
+  --c: var(--sk-ch-gang);
+}
+
+.sk-ch-obj.is-drones {
+  --c: var(--sk-ch-drones);
+}
+
+.sk-ch-obj.is-boss {
+  --c: var(--sk-ch-boss);
+}
+
+.sk-ch-obj::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 3px solid var(--sk-ink);
+  border-left: 0.55rem solid var(--c);
+  background: var(--sk-charcoal);
+  box-shadow: 4px 4px 0 var(--sk-ink);
+  transform: skewX(-10deg);
+}
+
+.sk-ch-obj-text {
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+  color: var(--sk-paper);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------ banner */
+
+.sk-ch-banner {
+  --c: var(--sk-ch-robbery);
+  position: absolute;
+  left: 50%;
+  top: 15vh;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  min-width: 18rem;
+  max-width: 80vw;
+  padding: 0.55rem 2.2rem 0.65rem;
+  isolation: isolate;
+  transform: translateX(-50%);
+  text-align: center;
+}
+
+.sk-ch-banner.is-on {
+  display: flex;
+  animation: sk-ch-banner 0.32s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+@keyframes sk-ch-banner {
+  from {
+    transform: translateX(-50%) scale(0.6) rotate(-3deg);
+    opacity: 0;
+  }
+}
+
+.sk-ch-banner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 3px solid var(--sk-ink);
+  border-left: 0.75rem solid var(--c);
+  background-color: var(--sk-charcoal);
+  background-image: var(--sk-dots-light);
+  background-size: 6px 6px;
+  box-shadow: 6px 6px 0 var(--sk-ink);
+  transform: skewX(-10deg);
+}
+
+.sk-ch-banner.is-gang {
+  --c: var(--sk-ch-gang);
+}
+
+.sk-ch-banner.is-drones {
+  --c: var(--sk-ch-drones);
+}
+
+.sk-ch-banner.is-boss {
+  --c: var(--sk-ch-boss);
+}
+
+.sk-ch-banner.is-clear {
+  --c: var(--sk-good);
+}
+
+.sk-ch-banner.is-expire,
+.sk-ch-banner.is-fail {
+  --c: #8b929a;
+}
+
+.sk-ch-banner-title {
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 1.9rem;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c);
+  -webkit-text-stroke: 0.07em var(--sk-ink);
+  paint-order: stroke fill;
+  text-shadow: 0.05em 0.05em 0 var(--sk-ink);
+}
+
+.sk-ch-banner-sub {
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+  color: var(--sk-paper);
+}
+
+/* ------------------------------------------------ knocked out, hurt flash */
+
+.sk-ch-down {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(40, 0, 0, 0.15) 30%, rgba(90, 0, 10, 0.72) 100%);
+}
+
+.sk-ch-down.is-on {
+  display: flex;
+}
+
+.sk-ch-down-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  transform: translateY(-6vh);
+}
+
+.sk-ch-down-title {
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 4rem;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  color: var(--sk-ch-hp);
+  -webkit-text-stroke: 0.06em var(--sk-ink);
+  paint-order: stroke fill;
+  text-shadow: 0.06em 0.06em 0 var(--sk-ink);
+  transform: skewX(-8deg);
+}
+
+.sk-ch-down-sub {
+  padding: 0.3rem 0.9rem 0.2rem;
+  border: 3px solid var(--sk-ink);
+  background: var(--sk-charcoal);
+  color: var(--sk-paper);
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+  box-shadow: 4px 4px 0 var(--sk-ink);
+}
+
+.sk-ch-hurt {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  box-shadow: inset 0 0 9vmin 2vmin rgba(255, 40, 40, 0.75);
+}
+
+/* ------------------------------------------------ touch: clear of the stick and the buttons */
+
+.sk-is-touch .sk-ch-vitals {
+  left: calc(var(--sk-safe-l) + 12px);
+  top: calc(var(--sk-safe-t) + 70px);
+  bottom: auto;
+  transform: scale(0.62);
+  transform-origin: 0 0;
+}
+
+.sk-is-touch .sk-ch-obj {
+  left: calc(var(--sk-safe-l) + 12px);
+  top: calc(var(--sk-safe-t) + 114px);
+  transform: scale(0.72);
+  transform-origin: 0 0;
+}
+
+.sk-is-touch .sk-ch-banner {
+  top: calc(var(--sk-safe-t) + 18vh);
+  transform: translateX(-50%) scale(0.78);
+  transform-origin: 50% 0;
+}
+
+.sk-is-touch .sk-ch-banner.is-on {
+  animation: none;
+}
+
+.sk-is-touch .sk-ch-combo {
+  left: calc(50% + 2.6rem);
+  top: calc(50% - 4.2rem);
+  transform: scale(0.8);
+}
+
+.sk-is-touch .sk-ch-dodge {
+  top: calc(50% + 2.6rem);
+}
+
+.sk-is-touch .sk-ch-down-title {
+  font-size: 3rem;
+}
