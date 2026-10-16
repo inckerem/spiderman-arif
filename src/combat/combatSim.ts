@@ -2,15 +2,16 @@ import { Vector3 } from 'three';
 import { tuning } from '../config/tuning';
 import { clamp } from '../core/math';
 import { Rng } from '../core/rng';
-import type { CollisionWorld } from '../physics/collision';
+import { makeRayHit, type CollisionWorld } from '../physics/collision';
 import { findRespawnRoof, findSafeSpot } from '../physics/safeSpot';
 import type { CityLayout } from '../world/types';
-import { BRAINS, type BrainHost } from './brains';
+import { attackStats, BOTTLE_SPEED, BRAINS, type BrainHost } from './brains';
 import type { SimEnemy, SimHero } from './entities';
 import { hashCombat } from './hash';
 import { PosHistory } from './history';
-import { GroundMover, makeMoveResult } from './mover';
-import { isBoss, kindInfo, kindStats } from './roster';
+import { GroundMover, LOS_SKIP, makeMoveResult } from './mover';
+import { aimVelocity, PROJ_GRAVITY, PROJ_LIFE, PROJ_RADIUS, ProjectilePool, segmentDistance } from './projectiles';
+import { guardBlocks, isBoss, kindInfo, kindStats } from './roster';
 import { inArena, type SpawnPoints } from './spawnPoints';
 import {
   ANIM,
@@ -22,10 +23,12 @@ import {
   HIT,
   MAX_ENEMY_ID,
   MOVE,
+  PK,
   type CombatEvent,
   type CombatHero,
   type CombatIntent,
   type CrimeEventInfo,
+  EK,
   type Enemy,
   type EnemyKind,
   type HeroState,
@@ -67,8 +70,26 @@ const DODGE_RING = 4;
 /** Hero samples this far from the respawn spot are stale after a respawn (until one arrives near it). */
 const RESPAWN_STALE = 10;
 const RESPAWN_STALE_TIME = 2;
+/** Gunman muzzle: ahead of the feet and up (aim pose). */
+const MUZZLE_FWD = 0.55;
+const MUZZLE_UP = 1.42;
+/** Hit chance of a gunman's round: base, minus per m/s of target speed and per metre, clamped. */
+const SHOT_BASE = 0.92;
+const SHOT_PER_SPEED = 0.02;
+const SHOT_PER_M = 0.006;
+const SHOT_MIN = 0.3;
+/** Shove on the hero when a strike bounces off a shield (m/s). */
+const BLOCK_BOUNCE = 4;
+/** A shield torn off staggers the brute this long. */
+const DISARM_STAGGER = 0.8;
+/** A charge that meets a wall stuns the brute this long. */
+const CHARGE_WALL_STUN = 1.0;
+/** Flyers: steering acceleration and the drag while knocked about. */
+const FLY_ACCEL = 16;
+const FLY_DRAG = 2.5;
 
 const scratch = new Vector3();
+const aim = { x: 0, y: 0, z: 0 };
 
 /**
  * The combat world: enemies, heroes' health, hits. Pure and deterministic: a
@@ -108,6 +129,10 @@ export class CombatSim implements BrainHost {
   private readonly pending: PendingHit[] = [];
   private readonly out: CombatEvent[] = [];
   private readonly moveRes = makeMoveResult();
+  /** Enemy projectiles in flight (bolts, bottles). */
+  readonly projectiles = new ProjectilePool();
+  private readonly ray = makeRayHit();
+  private readonly segS = new Float64Array(1);
   /** Active crime events (chunk 7). */
   readonly events: CrimeEventInfo[] = [];
 
@@ -271,7 +296,7 @@ export class CombatSim implements BrainHost {
   }
 
   hash(): string {
-    return hashCombat(this.time, this.enemies, this.heroes);
+    return hashCombat(this.time, this.enemies, this.heroes, this.projectiles.list);
   }
 
   // ---------------------------------------------------------------------------
@@ -314,7 +339,14 @@ export class CombatSim implements BrainHost {
     e.homeY = y;
     e.homeZ = z;
     e.wishX = 0;
+    e.wishY = 0;
     e.wishZ = 0;
+    e.ax = 0;
+    e.az = 0;
+    e.shots = 0;
+    e.nextShot = 0;
+    e.burstAt = 0;
+    e.los = false;
     e.grounded = !info.flyer;
     e.fallTop = y;
     // Stagger the target searches over the retarget period.
@@ -355,6 +387,9 @@ export class CombatSim implements BrainHost {
   debugClear(): void {
     for (let i = this.enemies.length - 1; i >= 0; i--) this.recycle(i);
     this.pending.length = 0;
+    // Projectiles in flight end where they are (clients drop them on `projEnd`).
+    for (const p of this.projectiles.list) this.out.push({ e: 'projEnd', id: p.id, x: p.x, y: p.y, z: p.z, tgt: -1 });
+    this.projectiles.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -398,9 +433,13 @@ export class CombatSim implements BrainHost {
     this.separate();
     for (const e of this.enemies) this.moveEnemy(e, dt);
 
-    // (6) Telegraphs land; pending hits resolve (dodge window).
+    // (6) Telegraphs land, bursts fire their rounds, charges connect; pending hits resolve (dodge window).
     for (const e of this.enemies) {
       if (e.tele && t >= e.tele.impactAt - 1e-9) this.landAttack(e);
+    }
+    for (const e of this.enemies) {
+      if (e.state === ES.ATTACK && e.shots > 0 && t >= e.nextShot - 1e-9) this.fireShot(e);
+      else if (e.state === ES.SPECIAL && e.kind === EK.BRUTE) this.chargeContact(e);
     }
     // (A resolution can drop other pending hits, e.g. when it knocks the hero down: rescan after each.)
     for (let i = 0; i < this.pending.length; ) {
@@ -412,7 +451,8 @@ export class CombatSim implements BrainHost {
       } else i++;
     }
 
-    // (7) Projectiles: chunk 6.
+    // (7) Projectiles.
+    this.stepProjectiles(dt);
 
     // (8) Heroes: regeneration, down -> respawn.
     for (const h of this.heroes.values()) {
@@ -458,7 +498,8 @@ export class CombatSim implements BrainHost {
 
   takeSlot(e: SimEnemy): boolean {
     if (e.slot >= 0) return true;
-    if (e.target < 0 || !kindInfo(e.kind).melee) return false;
+    // A disarmed gunman brawls like a thug.
+    if (e.target < 0 || (!kindInfo(e.kind).melee && (e.flags & EF.DISARMED) === 0)) return false;
     const max = tuning.enemies.maxMeleeAttackers;
     let used = 0;
     for (const o of this.enemies) if (o !== e && o.target === e.target && o.slot >= 0) used |= 1 << o.slot;
@@ -487,12 +528,21 @@ export class CombatSim implements BrainHost {
     e.animT0 = this.time;
   }
 
-  startTelegraph(e: SimEnemy, atk: number, delay: number): void {
+  startTelegraph(e: SimEnemy, atk: number, delay: number, anim: number = ANIM.WINDUP, landsIn = 0): void {
     const at = this.time + delay;
     e.tele = { atk, target: e.target, impactAt: at };
     this.setState(e, ES.TELEGRAPH, at);
-    this.setAnim(e, ANIM.WINDUP);
-    this.out.push({ e: 'tele', src: e.id, tgt: e.target, atk, at });
+    this.setAnim(e, anim);
+    this.out.push({ e: 'tele', src: e.id, tgt: e.target, atk, at: at + landsIn });
+  }
+
+  canSee(e: SimEnemy, h: SimHero): boolean {
+    const eh = kindInfo(e.kind).height * 0.8;
+    return this.mover.lineOfSight(e.pos.x, e.pos.y + eh, e.pos.z, h.px, h.py + tuning.body.chestHeight, h.pz);
+  }
+
+  rand(): number {
+    return this.rng.float();
   }
 
   // ---------------------------------------------------------------------------
@@ -529,8 +579,7 @@ export class CombatSim implements BrainHost {
   private moveEnemy(e: SimEnemy, dt: number): void {
     const info = kindInfo(e.kind);
     if (info.flyer) {
-      // Flyers arrive in chunk 6; keep them in place and in history.
-      this.enemyHist.record(e.pi, this.time, e.pos.x, e.pos.y, e.pos.z);
+      this.moveFlyer(e, info.radius, dt);
       return;
     }
     const en = tuning.enemies;
@@ -553,6 +602,9 @@ export class CombatSim implements BrainHost {
         this.setState(e, ES.STAGGER, this.time + tuning.combat.hitStun);
         this.setAnim(e, ANIM.STAGGER);
       }
+    } else if (e.state === ES.SPECIAL) {
+      // A charge: hard acceleration along the locked direction.
+      accel = 60;
     } else if (e.state === ES.KO || e.state === ES.DOWN || e.state === ES.PINNED || (e.state === ES.STAGGER && (e.flags & EF.KNOCKED) !== 0)) {
       // Knocked about: friction only on the ground.
       wishX = 0;
@@ -580,6 +632,13 @@ export class CombatSim implements BrainHost {
       res.grounded = true;
     }
     e.grounded = res.grounded;
+    // A charge into a wall stuns the brute.
+    if (e.state === ES.SPECIAL && res.wall && res.wallNX * e.ax + res.wallNZ * e.az < -0.5) {
+      e.vel.set(0, e.vel.y, 0);
+      this.setState(e, ES.STAGGER, this.time + CHARGE_WALL_STUN);
+      this.setAnim(e, ANIM.STAGGER);
+      e.flags |= EF.KNOCKED;
+    }
     if (!e.grounded) {
       e.flags |= EF.AIRBORNE;
       if (wasGrounded) e.fallTop = e.pos.y;
@@ -593,27 +652,292 @@ export class CombatSim implements BrainHost {
     this.enemyHist.record(e.pi, this.time, e.pos.x, e.pos.y, e.pos.z);
   }
 
+  /**
+   * Flyer mover: a sphere steered toward the brain's desired velocity
+   * (accelerated, in substeps of at most 0.3 m, `resolveSphere` against the
+   * world); knocked about it drifts with drag; KO'd it falls and lies on what
+   * is below.
+   */
+  private moveFlyer(e: SimEnemy, r: number, dt: number): void {
+    const v = e.vel;
+    const p = e.pos;
+    const g = tuning.enemies.gravity;
+    if (e.state === ES.KO) {
+      if (!e.grounded) {
+        v.y -= g * dt;
+        v.x *= Math.max(0, 1 - 0.8 * dt);
+        v.z *= Math.max(0, 1 - 0.8 * dt);
+      } else v.set(0, 0, 0);
+    } else if (e.state === ES.STAGGER) {
+      const k = Math.max(0, 1 - FLY_DRAG * dt);
+      v.x *= k;
+      v.y = v.y * k - g * 0.15 * dt;
+      v.z *= k;
+    } else {
+      // Arena leash (horizontal), then accelerate toward the wish.
+      let wx = e.wishX,
+        wz = e.wishZ;
+      if (e.arena >= 0) {
+        const a = this.spawns.arenas[e.arena];
+        if (a && !inArena(a, p.x, p.z, tuning.enemies.leashMargin)) {
+          const dx = a.x - p.x,
+            dz = a.z - p.z;
+          const l = Math.hypot(dx, dz) || 1;
+          const sp = kindStats(e.kind).speed;
+          wx = (dx / l) * sp;
+          wz = (dz / l) * sp;
+        }
+      }
+      const ax = wx - v.x,
+        ay = e.wishY - v.y,
+        az = wz - v.z;
+      const al = Math.hypot(ax, ay, az);
+      const maxDv = FLY_ACCEL * dt;
+      if (al > maxDv) {
+        v.x += (ax / al) * maxDv;
+        v.y += (ay / al) * maxDv;
+        v.z += (az / al) * maxDv;
+      } else v.set(wx, e.wishY, wz);
+    }
+    if (!(e.state === ES.KO && e.grounded)) {
+      const n = Math.max(1, Math.ceil((Math.hypot(v.x, v.y, v.z) * dt) / 0.3));
+      const sdt = dt / n;
+      for (let i = 0; i < n; i++) {
+        const ox = p.x,
+          oy = p.y,
+          oz = p.z;
+        p.x += v.x * sdt;
+        p.y += v.y * sdt;
+        p.z += v.z * sdt;
+        if (this.world.resolveSphere(p, r, 0, 4) > 0) {
+          // Pushed out: keep the velocity along the surface only.
+          const mx = (p.x - ox) / sdt,
+            my = (p.y - oy) / sdt,
+            mz = (p.z - oz) / sdt;
+          v.set(mx, my, mz);
+        }
+      }
+      if (e.state === ES.KO) {
+        const sup = this.world.supportHeight(p.x, p.z, p.y, 0);
+        if (sup.y > -Infinity && p.y - r <= sup.y + 0.05 && v.y <= 0) {
+          p.y = sup.y + r;
+          v.set(0, 0, 0);
+          e.grounded = true;
+        }
+      }
+    }
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) {
+      p.set(e.homeX, e.homeY, e.homeZ);
+      v.set(0, 0, 0);
+    }
+    if (e.grounded) e.flags &= ~EF.AIRBORNE;
+    else e.flags |= EF.AIRBORNE;
+    if (p.y < KILL_Y && e.state !== ES.KO) this.knockOut(e, -1, -1, e.hp, 0, 0, 0);
+    this.enemyHist.record(e.pi, this.time, p.x, p.y, p.z);
+  }
+
   // ---------------------------------------------------------------------------
   // Internals: enemy attacks on heroes
   // ---------------------------------------------------------------------------
+
+  /** Queue a hit on a hero, resolved after its grace; the dodge check is against `impactAt` (default: now). */
+  private queueHit(src: number, h: SimHero, atk: number, dmg: number, kx: number, ky: number, kz: number, fl: number, impactAt = this.time): void {
+    this.pending.push({ src, pid: h.pid, atk, dmg, impactAt, resolveAt: this.time + h.grace, kx, ky, kz, fl });
+  }
+
+  /** A gunman's round (delayed hitscan): rolled against the target's speed and distance, blocked by the world. */
+  private fireShot(e: SimEnemy): void {
+    const st = tuning.enemies.gunman;
+    e.shots--;
+    e.nextShot += st.burstGap;
+    const fx = -Math.sin(e.yaw),
+      fz = -Math.cos(e.yaw);
+    const mx = e.pos.x + fx * MUZZLE_FWD,
+      my = e.pos.y + MUZZLE_UP,
+      mz = e.pos.z + fz * MUZZLE_FWD;
+    const h = this.heroById(e.target);
+    let tx: number, ty: number, tz: number;
+    let hit = false;
+    if (h && this.heroTargetable(h)) {
+      tx = h.px;
+      ty = h.py + tuning.body.chestHeight;
+      tz = h.pz;
+      const dx = tx - mx,
+        dy = ty - my,
+        dz = tz - mz;
+      const d = Math.hypot(dx, dy, dz) || 1;
+      const blocked = this.world.raycast(mx, my, mz, dx / d, dy / d, dz / d, d, this.ray, LOS_SKIP, -1, 0, true);
+      if (blocked) {
+        tx = this.ray.x;
+        ty = this.ray.y;
+        tz = this.ray.z;
+      } else if (d <= st.range) {
+        const p = clamp(SHOT_BASE - SHOT_PER_SPEED * Math.hypot(h.vx, h.vy, h.vz) - SHOT_PER_M * d, SHOT_MIN, SHOT_BASE);
+        hit = this.rng.float() < p;
+      }
+      if (!blocked && !hit) {
+        // A miss: past the hero, off to a side (a tracer worth seeing).
+        const side = this.rng.chance(0.5) ? 1 : -1;
+        const off = 0.9 + this.rng.float() * 1.1;
+        const hl = Math.hypot(dx, dz) || 1;
+        tx += (-dz / hl) * off * side + (dx / d) * 6;
+        ty += (this.rng.float() - 0.3) * 1.2 + (dy / d) * 6;
+        tz += (dx / hl) * off * side + (dz / d) * 6;
+      }
+      // The whole burst dodges as one attack: every round checks the dodge against the burst's start.
+      if (hit) this.queueHit(e.id, h, ATK.BURST, st.damage, (dx / d) * 0.8, 0, (dz / d) * 0.8, HIT.STAGGER, e.burstAt);
+    } else {
+      tx = mx + fx * 30;
+      ty = my;
+      tz = mz + fz * 30;
+    }
+    this.out.push({ e: 'shot', src: e.id, x: mx, y: my, z: mz, tx, ty, tz, hit });
+  }
+
+  /** A charging brute reaching its target: a knockdown hit (dodgeable), then he recovers. */
+  private chargeContact(e: SimEnemy): void {
+    const h = this.heroById(e.target);
+    if (!h || !this.heroTargetable(h)) return;
+    const dx = h.px - e.pos.x,
+      dz = h.pz - e.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > kindInfo(e.kind).radius + tuning.body.radius + 0.5 || Math.abs(h.py - e.pos.y) > MELEE_DY) return;
+    const b = tuning.enemies.brute;
+    this.queueHit(e.id, h, ATK.CHARGE, b.chargeDamage, e.ax * 8, 3, e.az * 8, HIT.KNOCKDOWN);
+    e.vel.x *= 0.2;
+    e.vel.z *= 0.2;
+    this.setState(e, ES.RECOVER, this.time + 0.7);
+    this.setAnim(e, ANIM.STRIKE);
+  }
+
+  /** Launch a projectile at a hero, leading it by `lead` of the flight time. */
+  private launchAt(e: SimEnemy, h: SimHero, kind: number, atk: number, dmg: number, x: number, y: number, z: number, speed: number, lead: number): void {
+    const g = PROJ_GRAVITY[kind]!;
+    const ty = h.py + tuning.body.chestHeight;
+    let t = aimVelocity(x, y, z, h.px, ty, h.pz, speed, g, aim);
+    t = aimVelocity(x, y, z, h.px + h.vx * t * lead, ty + h.vy * t * lead * 0.5, h.pz + h.vz * t * lead, speed, g, aim);
+    const p = this.projectiles.launch(kind, e.id, HERO_ID_BASE + h.pid, atk, dmg, x, y, z, aim.x, aim.y, aim.z, this.time);
+    if (p) this.out.push({ e: 'proj', id: p.id, kind, src: e.id, tgt: p.tgt, x, y, z, vx: aim.x, vy: aim.y, vz: aim.z });
+  }
+
+  /**
+   * Projectiles: ballistic flight swept against the world (a raycast over the
+   * step) and every targetable hero's capsule (segment distance); the first
+   * contact along the step wins. A hero contact queues the hit (dodgeable).
+   */
+  private stepProjectiles(dt: number): void {
+    const list = this.projectiles.list;
+    const br = tuning.body.radius,
+      bh = tuning.body.height;
+    for (let i = 0; i < list.length; ) {
+      const p = list[i]!;
+      const r = PROJ_RADIUS[p.kind]!;
+      p.vy -= PROJ_GRAVITY[p.kind]! * dt;
+      const x0 = p.x,
+        y0 = p.y,
+        z0 = p.z;
+      const x1 = x0 + p.vx * dt,
+        y1 = y0 + p.vy * dt,
+        z1 = z0 + p.vz * dt;
+      let best = 2;
+      let who: SimHero | null = null;
+      for (const h of this.heroes.values()) {
+        if (!this.heroTargetable(h)) continue;
+        const d = segmentDistance(x0, y0, z0, x1, y1, z1, h.px, h.py + br, h.pz, h.px, h.py + bh - br, h.pz, this.segS);
+        if (d <= br + r && this.segS[0]! < best) {
+          best = this.segS[0]!;
+          who = h;
+        }
+      }
+      const len = Math.hypot(x1 - x0, y1 - y0, z1 - z0);
+      let wall = false;
+      if (len > 1e-6 && this.world.raycast(x0, y0, z0, (x1 - x0) / len, (y1 - y0) / len, (z1 - z0) / len, len, this.ray, LOS_SKIP, -1, 0, true)) {
+        const s = this.ray.t / len;
+        if (s < best) {
+          best = s;
+          wall = true;
+          who = null;
+        }
+      }
+      if (who || wall) {
+        const ex = x0 + (x1 - x0) * best,
+          ey = y0 + (y1 - y0) * best,
+          ez = z0 + (z1 - z0) * best;
+        if (who) {
+          const l = Math.hypot(p.vx, p.vz) || 1;
+          this.queueHit(p.src, who, p.atk, p.dmg, (p.vx / l) * 1.5, 0.5, (p.vz / l) * 1.5, HIT.STAGGER);
+        }
+        this.out.push({ e: 'projEnd', id: p.id, x: ex, y: ey, z: ez, tgt: who ? HERO_ID_BASE + who.pid : -1 });
+        this.projectiles.remove(i);
+        continue;
+      }
+      p.x = x1;
+      p.y = y1;
+      p.z = z1;
+      if (this.time - p.born > PROJ_LIFE[p.kind]! || p.y < KILL_Y) {
+        this.out.push({ e: 'projEnd', id: p.id, x: p.x, y: p.y, z: p.z, tgt: -1 });
+        this.projectiles.remove(i);
+        continue;
+      }
+      i++;
+    }
+  }
 
   /** A telegraphed attack reaches its impact time: in range -> pending hit (resolved after the hero's grace). */
   private landAttack(e: SimEnemy): void {
     const tele = e.tele!;
     e.tele = null;
-    const st = kindStats(e.kind);
+    const st = attackStats(e);
+    const en = tuning.enemies;
     this.setState(e, ES.ATTACK, this.time + 0.2);
     this.setAnim(e, ANIM.STRIKE);
     this.releaseSlot(e);
     e.cooldownUntil = this.time + st.cooldown * this.rng.range(0.85, 1.15);
     const h = this.heroById(tele.target);
+    switch (tele.atk) {
+      case ATK.BURST:
+        // The rounds fire from this step on (`fireShot`), `burstGap` apart.
+        e.shots = Math.max(1, Math.round(en.gunman.burst));
+        e.nextShot = this.time;
+        e.burstAt = tele.impactAt;
+        this.setState(e, ES.ATTACK, this.time + (e.shots - 1) * en.gunman.burstGap + 0.25);
+        this.setAnim(e, ANIM.SHOOT);
+        return;
+      case ATK.CHARGE: {
+        // The run: straight along the locked direction, up to the distance it chose plus 3 m.
+        const b = en.brute;
+        const d = h ? Math.hypot(h.px - e.pos.x, h.pz - e.pos.z) : 8;
+        this.setState(e, ES.SPECIAL, this.time + Math.min(1.6, (d + 3) / Math.max(1, b.chargeSpeed)));
+        this.setAnim(e, ANIM.CHARGE);
+        return;
+      }
+      case ATK.BOLT: {
+        this.setState(e, ES.ATTACK, this.time + 0.25);
+        if (!h || !this.heroTargetable(h)) return;
+        const r = kindInfo(e.kind).radius + 0.15;
+        const fx = -Math.sin(e.yaw),
+          fz = -Math.cos(e.yaw);
+        this.launchAt(e, h, PK.BOLT, ATK.BOLT, st.damage, e.pos.x + fx * r, e.pos.y, e.pos.z + fz * r, en.drone.boltSpeed, 0.5);
+        return;
+      }
+      case ATK.BOTTLE: {
+        this.setState(e, ES.ATTACK, this.time + 0.3);
+        if (!h || !this.heroTargetable(h)) return;
+        const fx = -Math.sin(e.yaw),
+          fz = -Math.cos(e.yaw);
+        this.launchAt(e, h, PK.BOTTLE, ATK.BOTTLE, en.thug.bottleDamage, e.pos.x + fx * 0.3, e.pos.y + 1.9, e.pos.z + fz * 0.3, BOTTLE_SPEED, 0.3);
+        return;
+      }
+      default:
+        break;
+    }
     if (!h || !this.heroTargetable(h)) return;
     const dx = h.px - e.pos.x,
       dy = h.py - e.pos.y,
       dz = h.pz - e.pos.z;
     const d = Math.hypot(dx, dz);
     if (d > st.range + MELEE_SLACK || Math.abs(dy) > MELEE_DY) return;
-    const kb = tele.atk === ATK.BAT_SWING ? tuning.enemies.bat.knockback : tuning.enemies.thug.knockback;
+    const kb = tele.atk === ATK.BAT_SWING ? en.bat.knockback : tele.atk === ATK.SLAM ? 7 : en.thug.knockback;
     const nx = d > 1e-4 ? dx / d : -Math.sin(e.yaw),
       nz = d > 1e-4 ? dz / d : -Math.cos(e.yaw);
     this.pending.push({
@@ -663,7 +987,8 @@ export class CombatSim implements BrainHost {
     for (const e of this.enemies) {
       if (e.target === id) {
         this.releaseSlot(e);
-        if (e.tele) {
+        e.shots = 0;
+        if (e.tele || e.state === ES.SPECIAL) {
           e.tele = null;
           this.setState(e, ES.RECOVER, this.time + 0.35);
         }
@@ -737,8 +1062,14 @@ export class CombatSim implements BrainHost {
     if (th && (th.down || th.afk)) return this.reject(pid, i.seq, 'state');
     const tp = scratch;
     this.positionAt(i.target, i.viewT, tp);
-    const tRad = e ? kindInfo(e.kind).radius : tuning.body.radius;
-    const tHgt = e ? kindInfo(e.kind).height : tuning.body.height;
+    const info = e ? kindInfo(e.kind) : null;
+    const tRad = info ? info.radius : tuning.body.radius;
+    let tHgt = info ? info.height : tuning.body.height;
+    // A flyer's position is its centre: as a capsule it is a sphere from centre - r to centre + r.
+    if (info && info.flyer) {
+      tp.y -= info.radius;
+      tHgt = info.radius * 2;
+    }
     if (i.k === 'strike') {
       if (i.viewT - h.lastStrike < c.minStrikeInterval * 0.8) return this.reject(pid, i.seq, 'rate');
       let reach = c.reach + c.lagTolerance;
@@ -750,13 +1081,13 @@ export class CombatSim implements BrainHost {
       }
       if (capsuleDistance(i.hx, i.hy + HERO_TORSO, i.hz, tp.x, tp.y, tp.z, tRad, tHgt) > reach) return this.reject(pid, i.seq, 'range');
       h.lastStrike = i.viewT;
-      return this.strike(h, i.target, i.move, i.hx, i.hz);
+      return this.strike(h, i.target, i.move, i.hx, i.hy, i.hz);
     }
     if (i.k === 'takedown') {
       if (h.focus < c.takedownCost) return this.reject(pid, i.seq, 'state');
       if (capsuleDistance(i.hx, i.hy + HERO_TORSO, i.hz, tp.x, tp.y, tp.z, tRad, tHgt) > c.takedownRange + c.lagTolerance) return this.reject(pid, i.seq, 'range');
       h.focus -= c.takedownCost;
-      return this.strike(h, i.target, MOVE.TAKEDOWN, i.hx, i.hz);
+      return this.strike(h, i.target, MOVE.TAKEDOWN, i.hx, i.hy, i.hz);
     }
     // Yank / pin: line range from the hero's chest with line of sight.
     const chest = tuning.body.chestHeight;
@@ -770,9 +1101,28 @@ export class CombatSim implements BrainHost {
   }
 
   /** Apply a validated strike (chain move, air, ground finisher or takedown) to an enemy or, in PvP, a hero. */
-  private strike(h: SimHero, target: number, move: number, hx: number, hz: number): void {
+  private strike(h: SimHero, target: number, move: number, hx: number, hy: number, hz: number): void {
     const c = tuning.combat;
     const now = this.time;
+    // The brute's shield: a frontal strike bounces off (no damage, no combo; the hero is shoved back).
+    let guardFl = 0;
+    if (target < HERO_ID_BASE && move !== MOVE.TAKEDOWN) {
+      const g = this.byId.get(target)!;
+      guardFl = guardBlocks(g.kind, g.guard, g.flags, g.state, g.pos.x, g.pos.y, g.pos.z, g.yaw, hx, hy, hz);
+      if (guardFl === HIT.BLOCKED) {
+        const dx = hx - g.pos.x,
+          dz = hz - g.pos.z;
+        const l = Math.hypot(dx, dz) || 1;
+        if (g.target !== HERO_ID_BASE + h.pid) {
+          this.releaseSlot(g);
+          g.target = HERO_ID_BASE + h.pid;
+        }
+        g.flags |= EF.ALERTED;
+        if (g.state !== ES.TELEGRAPH && g.state !== ES.ATTACK && g.state !== ES.SPECIAL) this.setAnim(g, ANIM.BLOCK);
+        this.out.push({ e: 'hit', src: HERO_ID_BASE + h.pid, tgt: g.id, move, dmg: 0, hp: g.hp, fl: HIT.BLOCKED, kx: (dx / l) * BLOCK_BOUNCE, ky: 1.5, kz: (dz / l) * BLOCK_BOUNCE });
+        return;
+      }
+    }
     // Combo and focus (takedowns spend focus, they do not build it).
     if (move !== MOVE.TAKEDOWN) {
       h.combo = now <= h.comboUntil ? h.combo + 1 : 1;
@@ -805,6 +1155,14 @@ export class CombatSim implements BrainHost {
     const nx = l > 1e-4 ? dx / l : -Math.sin(h.facing),
       nz = l > 1e-4 ? dz / l : -Math.cos(h.facing);
     const boss = isBoss(e.kind);
+    const flyer = kindInfo(e.kind).flyer;
+    fl |= guardFl;
+    if (flyer) {
+      // Juggled: popped up and back, staggered in the air (never knocked down).
+      knock = move === MOVE.AIR ? 3 : 2;
+      ky = 2.5;
+      fl = (fl & ~HIT.KNOCKDOWN) | HIT.STAGGER;
+    } else if (e.kind === EK.BRUTE) knock *= 0.5;
     if (move === MOVE.GROUND && !boss) dmg = Math.max(dmg, e.hp);
     if (move === MOVE.TAKEDOWN) dmg = boss ? e.maxHp * c.takedownBossFrac : e.hp;
     // Aggro on the attacker.
@@ -824,6 +1182,10 @@ export class CombatSim implements BrainHost {
       // Webbed in place: it takes the damage and stays pinned.
       knock = 0;
       ky = 0;
+    } else if (flyer) {
+      this.setState(e, ES.STAGGER, now + c.hitStun * 2);
+      this.setAnim(e, ANIM.STAGGER);
+      e.flags |= EF.KNOCKED;
     } else if (fl & HIT.KNOCKDOWN || e.state === ES.DOWN) {
       // A hit on a downed enemy keeps it down (no extra time).
       if (e.state !== ES.DOWN) this.setState(e, ES.DOWN, now + c.knockdownTime);
@@ -846,9 +1208,10 @@ export class CombatSim implements BrainHost {
     this.setState(e, ES.KO);
     this.setAnim(e, ANIM.KO);
     e.koAt = this.time;
+    e.shots = 0;
     e.flags |= EF.KNOCKED;
     e.vel.set(kx, ky, kz);
-    if (ky > 0) e.grounded = false;
+    if (ky > 0 || kindInfo(e.kind).flyer) e.grounded = false;
     this.out.push({ e: 'hit', src, tgt: e.id, move, dmg, hp: 0, fl: HIT.KO | HIT.KNOCKDOWN, kx, ky, kz });
   }
 
@@ -856,12 +1219,37 @@ export class CombatSim implements BrainHost {
     const c = tuning.combat;
     const src = HERO_ID_BASE + h.pid;
     e.tele = null;
+    e.shots = 0;
     this.releaseSlot(e);
     if (e.target !== src) e.target = src;
     e.flags |= EF.ALERTED;
     const dx = hx - e.pos.x,
       dz = hz - e.pos.z;
     const l = Math.hypot(dx, dz) || 1;
+    if (kindInfo(e.kind).flyer) {
+      // A drone yanked out of the air: down for good, falling toward the hero.
+      this.out.push({ e: 'yank', src, tgt: e.id, dur: 0 });
+      this.knockOut(e, src, MOVE.YANK, e.hp, (dx / l) * 5, 2, (dz / l) * 5);
+      return;
+    }
+    if (e.kind === EK.BRUTE && e.guard > 0 && (e.flags & EF.SHIELDLESS) === 0) {
+      // Too heavy to pull: the line tears the shield away instead and he staggers.
+      e.flags |= EF.SHIELDLESS | EF.KNOCKED;
+      e.guard = 0;
+      const dmg = Math.min(c.yankDmg, e.hp - 1);
+      e.hp -= Math.max(0, dmg);
+      this.setState(e, ES.STAGGER, this.time + DISARM_STAGGER);
+      this.setAnim(e, ANIM.STAGGER);
+      this.out.push({ e: 'yank', src, tgt: e.id, dur: 0 });
+      this.out.push({ e: 'hit', src, tgt: e.id, move: MOVE.YANK, dmg: Math.max(0, dmg), hp: e.hp, fl: HIT.STAGGER | HIT.DISARM, kx: 0, ky: 0, kz: 0 });
+      return;
+    }
+    // A gunman yanked loses his gun (and brawls from then on).
+    let disarm = 0;
+    if (e.kind === EK.GUNMAN && (e.flags & EF.DISARMED) === 0) {
+      e.flags |= EF.DISARMED;
+      disarm = HIT.DISARM;
+    }
     const stop = Math.min(c.yankStop, l);
     e.yx = hx - (dx / l) * stop;
     e.yy = Math.max(hy, e.pos.y);
@@ -876,23 +1264,26 @@ export class CombatSim implements BrainHost {
     this.setAnim(e, ANIM.YANKED);
     e.grounded = false;
     this.out.push({ e: 'yank', src, tgt: e.id, dur: c.yankTime });
-    this.out.push({ e: 'hit', src, tgt: e.id, move: MOVE.YANK, dmg, hp: e.hp, fl: HIT.STAGGER, kx: 0, ky: 0, kz: 0 });
+    this.out.push({ e: 'hit', src, tgt: e.id, move: MOVE.YANK, dmg, hp: e.hp, fl: HIT.STAGGER | disarm, kx: 0, ky: 0, kz: 0 });
   }
 
   private pin(h: SimHero, e: SimEnemy): void {
     const c = tuning.combat;
     const src = HERO_ID_BASE + h.pid;
     e.tele = null;
+    e.shots = 0;
     this.releaseSlot(e);
     e.target = src;
-    e.flags |= EF.ALERTED;
-    this.out.push({ e: 'pin', src, tgt: e.id, dur: c.pinTime });
-    // A downed enemy pinned to the ground stays down for good.
-    if (e.state === ES.DOWN) {
+    e.flags |= EF.ALERTED | EF.WEBBED;
+    // The brute is only stunned briefly (and his guard is down meanwhile).
+    const dur = e.kind === EK.BRUTE ? tuning.enemies.brute.pinStun : c.pinTime;
+    this.out.push({ e: 'pin', src, tgt: e.id, dur });
+    // A downed enemy pinned to the ground stays down for good; a webbed drone drops.
+    if (e.state === ES.DOWN || kindInfo(e.kind).flyer) {
       this.knockOut(e, src, MOVE.PIN, e.hp, 0, 0, 0);
       return;
     }
-    this.setState(e, ES.PINNED, this.time + c.pinTime);
+    this.setState(e, ES.PINNED, this.time + dur);
     this.setAnim(e, ANIM.PINNED);
     e.vel.set(0, Math.min(e.vel.y, 0), 0);
     this.out.push({ e: 'hit', src, tgt: e.id, move: MOVE.PIN, dmg: 0, hp: e.hp, fl: 0, kx: 0, ky: 0, kz: 0 });
@@ -906,6 +1297,7 @@ export class CombatSim implements BrainHost {
     e.id = 0;
     e.tele = null;
     e.slot = -1;
+    e.shots = 0;
     this.free.push(e.pi);
   }
 }
@@ -935,6 +1327,7 @@ function makeEnemy(pi: number): SimEnemy {
     homeY: 0,
     homeZ: 0,
     wishX: 0,
+    wishY: 0,
     wishZ: 0,
     grounded: true,
     fallTop: 0,
@@ -947,6 +1340,12 @@ function makeEnemy(pi: number): SimEnemy {
     yx: 0,
     yy: 0,
     yz: 0,
+    ax: 0,
+    az: 0,
+    shots: 0,
+    nextShot: 0,
+    burstAt: 0,
+    los: false,
   };
 }
 

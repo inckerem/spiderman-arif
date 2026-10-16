@@ -47,6 +47,8 @@ export interface PoseSlot {
   fxDone: number;
   /** Aim pitch toward the target (radians, up positive), for gunmen and drones. */
   aim: number;
+  /** Prop hide mask drawn last frame (`PROP` bits; tests read it). */
+  hide: number;
 }
 
 export function makePoseSlot(): PoseSlot {
@@ -73,6 +75,7 @@ export function makePoseSlot(): PoseSlot {
     fxT0: 0,
     fxDone: 0,
     aim: 0,
+    hide: 0,
   };
 }
 
@@ -110,6 +113,8 @@ export class EnemyAnimator {
    */
   pose(slot: PoseSlot, def: RigDef, e: ViewEnemy, t: number, dt: number): void {
     const age = Math.max(0, t - e.animT0);
+    // A new slot (an enemy coming into view) snaps to its pose instead of easing in from the rest pose.
+    const snap = slot.fresh;
     // Speed from the interpolated motion (the replicated state carries no velocity).
     if (slot.fresh) {
       slot.px = e.x;
@@ -137,7 +142,7 @@ export class EnemyAnimator {
     if (def.arch === ARCH.DRONE) rate = this.drone(slot, e, age, dt);
     else rate = this.humanoid(slot, def, e, age, dt, t);
     // Ease toward the targets.
-    const k = 1 - Math.exp(-dt * rate);
+    const k = snap ? 1 : 1 - Math.exp(-dt * rate);
     const n = def.bones * 3;
     const cur = slot.cur;
     for (let i = 0; i < n; i++) cur[i]! += (tg[i]! - cur[i]!) * k;
@@ -173,6 +178,8 @@ export class EnemyAnimator {
     const s = def.scale;
     const hipsY = def.offset[1]!;
     const alerted = (e.flags & EF.ALERTED) !== 0;
+    // The brute without his shield fights with his fists up.
+    const shield = a === ARCH.BRUTE && (e.flags & EF.SHIELDLESS) === 0;
     const id = e.id;
     // Locomotion phase (cycles per metre travelled, slower strides for the brute).
     const v = slot.speed;
@@ -202,7 +209,7 @@ export class EnemyAnimator {
       this.set(J.thighR, ko ? -0.35 : -0.2, 0, -0.1);
       this.set(J.shinL, ko ? 0.2 : 0.6, 0, 0);
       this.set(J.shinR, ko ? 0.6 : 0.3, 0, 0);
-      if (a === ARCH.BRUTE) this.shieldGuard(0.4);
+      if (shield) this.shieldGuard(0.4);
       return ko ? 7 : 11;
     }
     if (anim === ANIM.GETUP) {
@@ -219,7 +226,7 @@ export class EnemyAnimator {
         this.set(J.upperArmR, 0.5, 0, -0.35);
         this.set(J.upperArmL, -0.6, 0, 0.3);
       }
-      if (a === ARCH.BRUTE) this.shieldGuard(0.6);
+      if (shield) this.shieldGuard(0.6);
       return 13;
     }
     if (anim === ANIM.PINNED || e.state === ES.PINNED) {
@@ -282,8 +289,8 @@ export class EnemyAnimator {
     rate = 12;
     // Ready stance of the upper body while engaged (also while moving in a fight). The brute never lowers his shield.
     const ready = alerted && anim !== ANIM.IDLE ? 1 : alerted ? 0.8 : 0;
-    if (ready > 0) this.guard(a, ready, slot.aim);
-    else if (a === ARCH.BRUTE) this.shieldGuard(0.85);
+    if (ready > 0) this.guard(shield || a !== ARCH.BRUTE ? a : ARCH.THUG, ready, slot.aim);
+    else if (shield) this.shieldGuard(0.85);
 
     switch (anim) {
       case ANIM.ALERT: {
@@ -295,7 +302,7 @@ export class EnemyAnimator {
         break;
       }
       case ANIM.WINDUP:
-        rate = this.windup(a, clamp(age / Math.max(0.1, this.telegraphOf(a)), 0, 1), slot, t);
+        rate = this.windup(a, clamp(age / Math.max(0.1, this.telegraphOf(a)), 0, 1), slot, t, shield);
         break;
       case ANIM.AIM:
         this.aimPose(slot.aim, 1);
@@ -316,7 +323,7 @@ export class EnemyAnimator {
         break;
       }
       case ANIM.STRIKE:
-        rate = this.strike(a, age);
+        rate = this.strike(a, age, shield);
         break;
       case ANIM.STAGGER: {
         const k = 1 - smoothstep(0.15, 0.45, age);
@@ -341,7 +348,7 @@ export class EnemyAnimator {
       }
       case ANIM.BLOCK: {
         const k = Math.sin(Math.PI * clamp(age / 0.35, 0, 1));
-        this.shieldGuard(1);
+        if (shield) this.shieldGuard(1);
         this.add(J.upperArmL, -0.35 * k, 0, 0);
         this.add(J.spine, -0.12 * k, 0, 0);
         this.rootT[1] = -0.08 * k * s;
@@ -361,7 +368,7 @@ export class EnemyAnimator {
           this.add(J.thighR, 0.4 + 0.25 * Math.sin(t * 9), 0, 0);
           this.add(J.shinR, 0.6, 0, 0);
         }
-        this.shieldGuard(1);
+        if (shield) this.shieldGuard(1);
         rate = 16;
         break;
       case ANIM.THROW: {
@@ -443,7 +450,7 @@ export class EnemyAnimator {
   }
 
   /** Wind-up (u = progress 0..1 of the telegraph). */
-  private windup(a: number, u: number, slot: PoseSlot, t: number): number {
+  private windup(a: number, u: number, slot: PoseSlot, t: number, shield: boolean): number {
     const shake = Math.sin(t * 40) * 0.03 * u;
     switch (a) {
       case ARCH.THUG:
@@ -474,7 +481,7 @@ export class EnemyAnimator {
         return 16;
       case ARCH.BRUTE:
         // Gauntlet raised high for the slam, shield still up.
-        this.shieldGuard(1);
+        if (shield) this.shieldGuard(1);
         this.set(J.upperArmR, -2.75 * u, 0, -0.25);
         this.set(J.foreArmR, -0.5, 0, 0);
         this.add(J.spine, -0.22 * u, 0, 0);
@@ -488,7 +495,7 @@ export class EnemyAnimator {
     }
   }
 
-  private strike(a: number, age: number): number {
+  private strike(a: number, age: number, shield: boolean): number {
     // Snap out, hold, ease back.
     const k = smoothstep(0, 0.07, age) * (1 - smoothstep(0.22, 0.45, age));
     switch (a) {
@@ -519,7 +526,7 @@ export class EnemyAnimator {
         return 28;
       case ARCH.BRUTE:
         // The slam: gauntlet down in front, deep crouch.
-        this.shieldGuard(1);
+        if (shield) this.shieldGuard(1);
         this.set(J.upperArmR, -1.0 * k, 0, -0.1);
         this.set(J.foreArmR, -0.2, 0, 0);
         this.add(J.spine, 0.5 * k, 0, 0);

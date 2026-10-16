@@ -20,7 +20,8 @@ import { GeomBuilder } from '../../render/geomBuilder';
 import { toonGradient, withMRT } from '../../render/materials';
 import type { CombatView, ViewEnemy } from '../client/combatView';
 import { kindInfo } from '../roster';
-import { ANIM, EF, ES, HERO_ID_BASE, HIT, type CombatEvent, type EnemyKind } from '../types';
+import { ANIM, EF, ES, HERO_ID_BASE, HIT, PK, type CombatEvent, type EnemyKind } from '../types';
+import { CombatBeams } from './combatFx';
 import { EnemyAnimator, makePoseSlot, posedPoint, type PoseSlot } from './enemyAnimator';
 import { BONE_TEX_ROWS, BONE_TEX_W, enemyDepthMaterial, enemyMaterial, makeBoneTexture } from './enemyMaterial';
 import { ARCH, ARCH_COUNT, ARCH_NAMES, J, PROP, TINTS, archOf, enemyRigs, type RigDef } from './enemyRigs';
@@ -34,6 +35,23 @@ const FAR_POSE_EVERY = 3;
 /** Close enemies are drawn even just outside the view (their shadows can fall into it). */
 const ALWAYS_NEAR = 18;
 const FLASH_TIME = 0.12;
+/** Short-lived lines (tracers, web lines of a yank or pin) kept at once. */
+const MAX_LINES = 24;
+const TRACER_TIME = 0.07;
+const WEB_LINE_TIME = 0.22;
+
+interface FxLine {
+  ax: number;
+  ay: number;
+  az: number;
+  bx: number;
+  by: number;
+  bz: number;
+  /** Render time it disappears. */
+  until: number;
+  /** 0 tracer, 1 web line. */
+  kind: number;
+}
 
 const _m = new Matrix4();
 const _q = new Quaternion();
@@ -111,6 +129,13 @@ export class EnemyRenderer {
   readonly group = new Group();
   readonly meshes: InstancedMesh[] = [];
   readonly cocoons: InstancedMesh;
+  /** Laser sights, tracers, projectiles in flight and web lines (one draw call). */
+  readonly beams = new CombatBeams();
+  private readonly lines: FxLine[] = [];
+  private lineNext = 0;
+  /** Kinds of recent projectiles by id (their end event carries no kind). */
+  private readonly projIds = new Int32Array(64).fill(-1);
+  private readonly projKinds = new Int8Array(64);
   /** Visible enemies in the last frame (and per LOD band), for tests and the debug HUD. */
   readonly stats = { visible: 0, near: 0, far: 0, culled: 0, hidden: 0, posed: 0 };
   readonly rigs: readonly RigDef[];
@@ -185,8 +210,16 @@ export class EnemyRenderer {
     this.cocoons.visible = false;
     this.cocoons.name = 'enemy-cocoons';
     this.group.add(this.cocoons);
+    this.group.add(this.beams.mesh);
+    for (let i = 0; i < MAX_LINES; i++) this.lines.push({ ax: 0, ay: 0, az: 0, bx: 0, by: 0, bz: 0, until: -1e9, kind: 0 });
     this.group.name = 'enemies';
     for (let i = 0; i < BONE_TEX_ROWS; i++) this.pool.push(makePoseSlot());
+  }
+
+  /** Prop hide mask (`PROP` bits) an enemy was drawn with last frame, or -1 when it was not drawn. */
+  hiddenProps(id: number): number {
+    const s = this.byId.get(id);
+    return s ? s.hide : -1;
   }
 
   /** Visible enemies drawn in the last frame. */
@@ -215,6 +248,9 @@ export class EnemyRenderer {
     }
     this.cocoons.count = 0;
     this.cocoons.visible = false;
+    for (const l of this.lines) l.until = -1e9;
+    this.beams.begin();
+    this.beams.end();
     this.stats.visible = 0;
   }
 
@@ -299,6 +335,7 @@ export class EnemyRenderer {
     }
     st.visible = total;
     this.pack(view, t);
+    this.drawBeams(view, t, hero);
     // Slots of enemies gone (or out of sight) go back to the pool.
     for (let i = this.active.length - 1; i >= 0; i--) {
       const s = this.active[i]!;
@@ -357,13 +394,14 @@ export class EnemyRenderer {
         if (a === ARCH.BRUTE && (e.flags & EF.SHIELDLESS) !== 0) hide |= PROP.SHIELD;
         if ((a === ARCH.GUNMAN || a === ARCH.BAT) && (e.flags & EF.DISARMED) !== 0) hide |= PROP.WEAPON;
         if (a === ARCH.THUG && !(e.anim === ANIM.THROW && e.state === ES.TELEGRAPH)) hide |= PROP.BOTTLE;
+        slot.hide = hide;
         st[i * 4] = tell;
         st[i * 4 + 1] = flash;
         st[i * 4 + 2] = hide;
         st[i * 4 + 3] = this.near[a]![i] ? 1 : 0;
         // Web-pin cocoon around the torso (a pinned drone is wrapped whole).
-        if (e.state === ES.PINNED && nCocoon < BONE_TEX_ROWS) {
-          const info = kindInfo(e.kind as EnemyKind);
+        const info = kindInfo(e.kind as EnemyKind);
+        if ((e.state === ES.PINNED || (info.flyer && (e.flags & EF.WEBBED) !== 0)) && nCocoon < BONE_TEX_ROWS) {
           const grow = Math.min(1, (t - e.animT0) / 0.15);
           if (info.flyer) {
             _p.set(e.x, e.y, e.z);
@@ -416,7 +454,42 @@ export class EnemyRenderer {
 
   /** A combat event's visual effect (sparks at the hit enemy or on the hero). */
   onEvent(ev: CombatEvent, view: CombatView, hero: Vector3 | null, t: number): void {
-    if (ev.e !== 'hit') return;
+    switch (ev.e) {
+      case 'shot': {
+        // Muzzle flash and a tracer from the posed muzzle (the sim's estimate when the gunman is not drawn).
+        const e = view.enemy(ev.src);
+        const slot = this.byId.get(ev.src);
+        if (e && slot) this.muzzle(slot, e, _p);
+        else _p.set(ev.x, ev.y, ev.z);
+        this.particles.flash(_p, 1, 0.85, 0.4, 0.45, 4);
+        this.line(_p.x, _p.y, _p.z, ev.tx, ev.ty, ev.tz, t + TRACER_TIME, 0);
+        return;
+      }
+      case 'proj':
+        this.projIds[ev.id & 63] = ev.id;
+        this.projKinds[ev.id & 63] = ev.kind;
+        return;
+      case 'projEnd':
+        if (ev.tgt < 0) {
+          const bottle = this.projIds[ev.id & 63] === ev.id && this.projKinds[ev.id & 63] === PK.BOTTLE;
+          if (bottle) this.particles.flash(_v.set(ev.x, ev.y, ev.z), 0.45, 0.8, 0.4, 0.3, 10);
+          else this.particles.flash(_v.set(ev.x, ev.y, ev.z), 0.35, 1, 0.85, 0.6, 6);
+        }
+        return;
+      case 'yank':
+      case 'pin': {
+        if (ev.src !== view.selfId || !hero) return;
+        const e = view.enemy(ev.tgt);
+        if (!e) return;
+        const info = kindInfo(e.kind as EnemyKind);
+        this.line(hero.x, hero.y + 1.3, hero.z, e.x, info.flyer ? e.y : e.y + info.height * 0.6, e.z, t + WEB_LINE_TIME, 1);
+        return;
+      }
+      case 'hit':
+        break;
+      default:
+        return;
+    }
     if (ev.tgt >= HERO_ID_BASE) {
       if (ev.tgt !== view.selfId || !hero || ev.dmg <= 0) return;
       const src = view.enemy(ev.src);
@@ -451,6 +524,74 @@ export class EnemyRenderer {
       _d.set(-Math.sin(e.yaw), 0, -Math.cos(e.yaw));
     }
     this.particles.hitSpark(_v, _d, ko ? 1 : Math.min(1, ev.dmg / 25), blocked);
+    // A torn-off shield or a yanked gun: a white burst at the hands.
+    if ((ev.fl & HIT.DISARM) !== 0) this.particles.flash(_v.set(e.x, e.y + info.height * 0.55, e.z), 0.9, 0.9, 1, 0.9, 12);
+  }
+
+  private line(ax: number, ay: number, az: number, bx: number, by: number, bz: number, until: number, kind: number): void {
+    const l = this.lines[this.lineNext]!;
+    this.lineNext = (this.lineNext + 1) % MAX_LINES;
+    l.ax = ax;
+    l.ay = ay;
+    l.az = az;
+    l.bx = bx;
+    l.by = by;
+    l.bz = bz;
+    l.until = until;
+    l.kind = kind;
+  }
+
+  /** The gunman's muzzle in the world, from his posed right hand. */
+  private muzzle(slot: PoseSlot, e: ViewEnemy, out: Vector3): Vector3 {
+    const def = this.rigs[slot.arch]!;
+    const s = def.scale;
+    const o = J.handR * 3;
+    posedPoint(slot, J.handR, def.bind[o]!, def.bind[o + 1]! - 0.25 * s, def.bind[o + 2]! - 0.035 * s, out);
+    _q.setFromAxisAngle(_up, e.yaw + Math.PI);
+    return out.applyQuaternion(_q).add(_d.set(e.x, e.y, e.z));
+  }
+
+  /** Laser sights of aiming gunmen, projectiles in flight, tracers and web lines. */
+  private drawBeams(view: CombatView, t: number, hero: Vector3 | null): void {
+    const b = this.beams;
+    b.begin();
+    const me = view.selfId;
+    for (let a = 0; a < ARCH_COUNT; a++) {
+      if (a !== ARCH.GUNMAN) continue;
+      for (let i = 0; i < this.counts[a]!; i++) {
+        const slot = this.lists[a]![i]!;
+        const e = view.enemy(slot.id)!;
+        if (e.state !== ES.TELEGRAPH || e.anim !== ANIM.AIM) continue;
+        this.muzzle(slot, e, _p);
+        if (hero && e.target === me) _v.set(hero.x, hero.y + 1.15, hero.z);
+        else {
+          const c = Math.cos(slot.aim);
+          _v.set(_p.x - Math.sin(e.yaw) * 40 * c, _p.y + Math.sin(slot.aim) * 40, _p.z - Math.cos(e.yaw) * 40 * c);
+        }
+        // The sight brightens as the shot comes.
+        const k = Math.min(1, (t - e.animT0) / Math.max(0.1, tuning.enemies.gunman.telegraph));
+        b.add(_p.x, _p.y, _p.z, _v.x, _v.y, _v.z, 0.02 + 0.02 * k, 1, 0.08, 0.04, 0.55 + 0.45 * k);
+      }
+    }
+    for (const p of view.projectiles) {
+      const sp = Math.hypot(p.vx, p.vy, p.vz) || 1;
+      if (p.kind === PK.BOTTLE) b.add(p.x - (p.vx / sp) * 0.3, p.y - (p.vy / sp) * 0.3, p.z - (p.vz / sp) * 0.3, p.x, p.y, p.z, 0.13, 0.3, 0.75, 0.35, 0.9);
+      else {
+        b.add(p.x - (p.vx / sp) * 1.4, p.y - (p.vy / sp) * 1.4, p.z - (p.vz / sp) * 1.4, p.x, p.y, p.z, 0.32, 0.2, 0.9, 0.75, 0.55);
+        b.add(p.x - (p.vx / sp) * 0.6, p.y - (p.vy / sp) * 0.6, p.z - (p.vz / sp) * 0.6, p.x, p.y, p.z, 0.14, 0.85, 1, 0.95, 1);
+      }
+    }
+    for (const l of this.lines) {
+      if (l.until <= t) continue;
+      if (l.kind === 0) {
+        const k = (l.until - t) / TRACER_TIME;
+        b.add(l.ax, l.ay, l.az, l.bx, l.by, l.bz, 0.05, 1, 0.85, 0.45, k);
+      } else {
+        const k = (l.until - t) / WEB_LINE_TIME;
+        b.add(l.ax, l.ay, l.az, l.bx, l.by, l.bz, 0.035, 0.9, 0.92, 0.98, 0.8 * k);
+      }
+    }
+    b.end();
   }
 
   /** One instance of every archetype (rest pose) and a cocoon at the warm-up spot. */
@@ -483,6 +624,9 @@ export class EnemyRenderer {
     this.cocoons.instanceMatrix.needsUpdate = true;
     this.cocoons.count = 1;
     this.cocoons.visible = true;
+    this.beams.begin();
+    this.beams.add(this.warmAt.x, this.warmAt.y + 1, this.warmAt.z, this.warmAt.x + 1, this.warmAt.y + 1, this.warmAt.z, 0.05, 1, 1, 1, 0.01);
+    this.beams.end();
   }
 }
 

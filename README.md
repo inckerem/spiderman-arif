@@ -107,7 +107,17 @@ The game also works under a path instead of a subdomain (asset paths are relativ
 | Esc | Pause menu |
 | ` (backtick) | Debug and tuning panel |
 
-Combat is being built (M11): enemies do not appear in normal play yet. In a dev build (`npm run dev`), `__game.combat.spawnAhead(0, 8)` in the browser console spawns a thug 8 m ahead (`1` for a bat thug, `2` a gunman, `3` a shielded brute, `4` a drone).
+Combat is being built (M11): enemies do not appear in normal play yet. The enemies and how to beat them:
+
+| Enemy | Threat | Counter |
+| --- | --- | --- |
+| Serseri (street thug) | punches; throws bottles at you from below when you are 3 m+ above | anything |
+| Sopalı (bat thug) | slow, heavy bat swing that knocks you down | dodge the swing, then counter |
+| Tetikçi (gunman) | keeps 12-25 m away, aims with a red laser, fires 3-round bursts (also at you mid-swing) | dodge when the laser locks on; a web yank pulls the gun away and he brawls instead |
+| Zırhlı (shielded brute) | shield blocks hits from the front (you bounce off); slams and head-down charges | hit him from behind or from above, yank the shield off, or pin him (a short stun) |
+| Dron (drone) | flies circles above you and fires glowing bolts | dodge the bolt; click it to lunge up and juggle it with air strikes; a yank or a pin drops it |
+
+Every attack winds up first with a glowing tell; Space in that moment dodges. In a dev build (`npm run dev`), `__game.combat.spawnAhead(0, 8)` in the browser console spawns a thug 8 m ahead (`1` for a bat thug, `2` a gunman, `3` a shielded brute, `4` a drone).
 
 These are the default keys. Every action except Esc, mouse look, the wheel, 1–4 and ` can be rebound under **Ayarlar > Tuş atamaları** (Settings > Key bindings): two keys or mouse buttons per action, saved in the browser. The controls screen and the photo panel always show the current keys, named after the player's keyboard layout (Turkish Q and F layouts included).
 

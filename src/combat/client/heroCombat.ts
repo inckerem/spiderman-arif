@@ -13,8 +13,8 @@ import {
 } from '../../player/player';
 import { makeRayHit } from '../../physics/collision';
 import { capsuleDistance, chainMove } from '../combatSim';
-import { kindInfo } from '../roster';
-import { EF, ES, MOVE, type CombatEvent, type EnemyKind } from '../types';
+import { guardBlocks, kindInfo } from '../roster';
+import { EF, ES, HIT, MOVE, type CombatEvent, type EnemyKind } from '../types';
 import type { CombatView, ThreatInfo, ViewEnemy } from './combatView';
 import type { CombatLink } from './link';
 
@@ -93,7 +93,7 @@ export class HeroCombat {
   enabled = true;
   readonly hud: HeroCombatHud = { combo: 0, focus: 0, target: -1, threat: null };
   /** Counters for tests and diagnostics. */
-  readonly stats = { strikes: 0, lunges: 0, whiffs: 0, intents: 0, predicted: 0, yanks: 0, pins: 0, dodges: 0, takedowns: 0, captured: 0, rejected: 0 };
+  readonly stats = { strikes: 0, lunges: 0, whiffs: 0, intents: 0, predicted: 0, yanks: 0, pins: 0, dodges: 0, takedowns: 0, captured: 0, rejected: 0, blocked: 0 };
   private captureL = false;
   private captureR = false;
   private rTarget = -1;
@@ -265,6 +265,8 @@ export class HeroCombat {
     if (!this.enabled) return;
     const pl = this.player;
     const now = this.link.now();
+    // Projectile threats are measured against where the hero is.
+    this.view.setSelf(pl.pos.x, pl.pos.y, pl.pos.z);
     // Events of this step: a lunge arrived (strike now), a contact frame (reach check, intent).
     const n = events.length;
     for (let i = 0; i < n; i++) {
@@ -312,6 +314,11 @@ export class HeroCombat {
           this.queued = -1;
           this.chain = 0;
           this.chainUntil = -1e9;
+        } else if (e.src === me && (e.fl & HIT.BLOCKED) !== 0) {
+          // Bounced off a shield: shoved back with a flinch, the buffered strike dropped.
+          pl.applyHit(e.kx, e.ky, e.kz, 0);
+          this.queued = -1;
+          this.stats.blocked++;
         }
         break;
       case 'down':
@@ -564,7 +571,8 @@ export class HeroCombat {
       this.strikeOn(t, now);
       return;
     }
-    const air = !this.grounded;
+    // A flyer is always an air lunge (from the ground too): straight up to it.
+    const air = !this.grounded || info.flyer;
     const stop = info.radius + C.reach - 0.2;
     if (pl.beginLunge(t.x, this.lungeY(t, air), t.z, stop, air)) this.stats.lunges++;
     else this.strikeTarget = -1;
@@ -598,8 +606,11 @@ export class HeroCombat {
     const surf = capsuleDistance(pl.pos.x, pl.pos.y + HERO_TORSO, pl.pos.z, t.x, info.flyer ? t.y - info.radius : t.y, t.z, info.radius, info.flyer ? info.radius * 2 : info.height);
     const range = move === MOVE.GROUND ? C.groundFinisherRange : move === MOVE.TAKEDOWN ? C.takedownRange : C.reach + CONTACT_SLACK;
     if (surf > range) return;
-    this.view.flinch(id, now + 0.2);
-    this.stats.predicted++;
+    // No predicted flinch when the strike will bounce off a raised shield.
+    if (move === MOVE.TAKEDOWN || guardBlocks(t.kind, t.guard, t.flags, t.state, t.x, t.y, t.z, t.yaw, pl.pos.x, pl.pos.y, pl.pos.z) !== HIT.BLOCKED) {
+      this.view.flinch(id, now + 0.2);
+      this.stats.predicted++;
+    }
     const p = pl.pos;
     if (move === MOVE.TAKEDOWN) {
       this.link.intent({ k: 'takedown', seq: ++this.seq, target: id, viewT: this.link.renderTime(), hx: p.x, hy: p.y, hz: p.z });

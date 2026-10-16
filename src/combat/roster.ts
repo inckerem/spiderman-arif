@@ -1,5 +1,5 @@
 import { tuning } from '../config/tuning';
-import { EK, type EnemyKind } from './types';
+import { EF, EK, ES, HIT, type EnemyKind } from './types';
 
 /** Live per-kind stats (`tuning.enemies.<key>`): the debug panel edits them in place. */
 export interface KindStats {
@@ -50,3 +50,25 @@ export function kindInfo(kind: EnemyKind): KindInfo {
 }
 
 export const isBoss = (kind: number): boolean => ROSTER[kind]?.boss === true;
+
+/**
+ * The shielded brute's guard against a hero strike from (hx, hy, hz): 0 when
+ * no guard is up (the strike lands normally), else `HIT.BACK` (from more than
+ * `backArcDeg` off his facing) or `HIT.ABOVE` (the hero `aboveHeight` or more
+ * above his feet), which land, or `HIT.BLOCKED`. The guard is down without
+ * the shield and while he is pinned, down, yanked or knocked out. Shared by
+ * the sim (authoritative) and the client (no predicted flinch on a block).
+ */
+export function guardBlocks(kind: number, guard: number, flags: number, state: number, ex: number, ey: number, ez: number, yaw: number, hx: number, hy: number, hz: number): number {
+  if (kind !== EK.BRUTE || guard <= 0 || (flags & EF.SHIELDLESS) !== 0) return 0;
+  if (state === ES.PINNED || state === ES.DOWN || state === ES.YANKED || state === ES.KO) return 0;
+  const b = tuning.enemies.brute;
+  if (hy >= ey + b.aboveHeight) return HIT.ABOVE;
+  const dx = hx - ex,
+    dz = hz - ez;
+  const l = Math.hypot(dx, dz);
+  if (l < 1e-4) return HIT.BLOCKED;
+  // Facing (the player's convention): forward = (-sin yaw, -cos yaw).
+  const cos = (-Math.sin(yaw) * dx - Math.cos(yaw) * dz) / l;
+  return cos < Math.cos((b.backArcDeg * Math.PI) / 180) ? HIT.BACK : HIT.BLOCKED;
+}

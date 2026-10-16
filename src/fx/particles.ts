@@ -206,6 +206,17 @@ export class Particles {
     }
   }
 
+  /** A small coloured flash with a few sparks (muzzle flash, bolt impact, breaking bottle). */
+  flash(at: Vector3, r: number, g: number, b: number, size: number, sparks: number): void {
+    this.c.setRGB(r, g, b);
+    this.v.set(0, 0, 0);
+    this.spawn(at, this.v, size, 1.2, 0.09, this.c, 1, 0, 0, SHAPE_STAR);
+    for (let i = 0; i < sparks; i++) {
+      this.v.set(Math.random() - 0.5, Math.random() - 0.3, Math.random() - 0.5).normalize().multiplyScalar(2 + Math.random() * 4);
+      this.spawn(at, this.v, 0.07 + Math.random() * 0.05, 0, 0.18 + Math.random() * 0.2, this.c, 1, 8, 1.2, SHAPE_SOFT);
+    }
+  }
+
   wallDust(at: Vector3, normal: Vector3): void {
     for (let i = 0; i < 10; i++) {
       this.v.copy(normal).multiplyScalar(1 + Math.random() * 2).add(this.o.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(2));

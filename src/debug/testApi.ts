@@ -34,7 +34,7 @@ import {
 } from './testDrivers';
 import { makeAnchorResult } from '../player/targeting';
 import { ES_NAMES, type EnemyKind } from '../combat/types';
-import { combatComboTest, combatDodgeTest, combatLineTest, combatRoutingTest } from './combatDrivers';
+import { combatComboTest, combatDodgeTest, combatDroneTest, combatLineTest, combatRoutingTest, combatShieldTest, combatShotTest } from './combatDrivers';
 
 declare global {
   interface Window {
@@ -279,6 +279,9 @@ export function installTestApi(game: Game, app?: App): void {
       comboTest: () => combatComboTest(game),
       lineTest: () => combatLineTest(game),
       dodgeTest: () => combatDodgeTest(game),
+      shotTest: () => combatShotTest(game),
+      shieldTest: () => combatShieldTest(game),
+      droneTest: () => combatDroneTest(game),
       /** Own combat state and the recent combat events (room time, event). */
       state(): Record<string, unknown> {
         const v = game.combatView;

@@ -1,3 +1,4 @@
+import type { Projectile } from './projectiles';
 import type { CombatHero, Enemy } from './types';
 
 /**
@@ -38,7 +39,7 @@ export class StateHash {
   }
 }
 
-export function hashCombat(time: number, enemies: readonly Enemy[], heroes: ReadonlyMap<number, CombatHero>): string {
+export function hashCombat(time: number, enemies: readonly Enemy[], heroes: ReadonlyMap<number, CombatHero>, projectiles: readonly Projectile[] = []): string {
   const h = new StateHash();
   h.num(time, 1e6).int(enemies.length);
   for (const e of enemies) {
@@ -52,5 +53,7 @@ export function hashCombat(time: number, enemies: readonly Enemy[], heroes: Read
     h.int(c.pid).num(c.hp).bool(c.down).num(c.downUntil).num(c.lastHurt).num(c.iframesUntil).int(c.combo).num(c.comboUntil).num(c.focus).num(c.lastStrike);
     h.num(c.x).num(c.y).num(c.z);
   }
+  h.int(projectiles.length);
+  for (const p of projectiles) h.int(p.id).int(p.kind).int(p.src).int(p.tgt).num(p.x).num(p.y).num(p.z).num(p.vx).num(p.vy).num(p.vz);
   return h.hex();
 }

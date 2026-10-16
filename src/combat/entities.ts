@@ -7,8 +7,9 @@ export interface SimEnemy extends Enemy {
   homeX: number;
   homeY: number;
   homeZ: number;
-  /** Desired horizontal velocity set by the brain (m/s). */
+  /** Desired velocity set by the brain (m/s); `wishY` only for flyers. */
   wishX: number;
+  wishY: number;
   wishZ: number;
   grounded: boolean;
   /** Highest feet height since leaving the ground (fall KO). */
@@ -26,6 +27,15 @@ export interface SimEnemy extends Enemy {
   yx: number;
   yy: number;
   yz: number;
+  /** Attack direction locked at launch (brute charge), unit XZ. */
+  ax: number;
+  az: number;
+  /** Gunman burst: rounds left, the time of the next and the burst's start (its rounds dodge as one attack). */
+  shots: number;
+  nextShot: number;
+  burstAt: number;
+  /** Line of sight to the target at the last think (chest to chest). */
+  los: boolean;
 }
 
 /** Sim-side hero: the shared `CombatHero` plus extrapolation, rate and dodge bookkeeping. */

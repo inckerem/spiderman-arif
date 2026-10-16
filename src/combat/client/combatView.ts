@@ -1,5 +1,6 @@
 import { tuning } from '../../config/tuning';
-import { ES, HERO_ID_BASE, type CombatEvent } from '../types';
+import { PROJ_GRAVITY, PROJ_LIFE } from '../projectiles';
+import { ATK, ES, HERO_ID_BASE, PK, type CombatEvent } from '../types';
 import type { CombatDownMsg, CombatSnapshot } from './link';
 
 /** Samples kept per enemy (online snapshots come at 15 Hz and render 0.1 s late: 8 is plenty). */
@@ -10,6 +11,12 @@ const MAX_EXTRAPOLATE = 0.15;
 const MAX_THREATS = 8;
 /** Recent events kept for tests and diagnostics. */
 const LOG_SIZE = 128;
+/** Projectiles tracked at once. */
+const MAX_PROJ = 48;
+/** A projectile counts as a threat when it passes this close to the hero's chest (m)... */
+const PROJ_THREAT_MISS = 2.2;
+/** ...within this long (s). */
+const PROJ_THREAT_HORIZON = 1.5;
 
 /** An enemy as this client sees it: replicated state plus a position interpolated at the render time. */
 export interface ViewEnemy {
@@ -63,6 +70,26 @@ export interface SelfView {
   comboUntil: number;
   focus: number;
   iframesUntil: number;
+}
+
+/** A projectile in flight as this client sees it (from its `proj` event, ballistic). */
+export interface ViewProjectile {
+  id: number;
+  kind: number;
+  src: number;
+  tgt: number;
+  /** Launch state and room time. */
+  x0: number;
+  y0: number;
+  z0: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  t0: number;
+  /** Position at the last `update` (render time). */
+  x: number;
+  y: number;
+  z: number;
 }
 
 export interface LoggedEvent {
@@ -121,8 +148,17 @@ export class CombatView {
   /** Enemies currently replicated (pooled entries; order is not stable). */
   readonly enemies: ViewEnemy[] = [];
   readonly self: SelfView = { hp: 100, maxHp: 100, down: false, downUntil: 0, combo: 0, comboUntil: -1e9, focus: 0, iframesUntil: -1e9 };
-  /** The soonest pending attack on this hero, or null. */
+  /** The soonest pending attack on this hero (a telegraph or a projectile on its way), or null. */
   threat: ThreatInfo | null = null;
+  /** Enemy projectiles in flight. */
+  readonly projectiles: ViewProjectile[] = [];
+  private readonly projPool: ViewProjectile[] = [];
+  private readonly projThreat: ThreatInfo = { src: 0, atk: 0, at: 0, x: 0, z: 0 };
+  /** This hero's feet (set every tick by the hero's combat code; projectile threats need it). */
+  private selfX = 0;
+  private selfY = 0;
+  private selfZ = 0;
+  private selfKnown = false;
   selfPid = 1;
   /** Room time of the newest snapshot. */
   snapTime = 0;
@@ -154,9 +190,18 @@ export class CombatView {
     else for (const ev of msg.ev) this.applyEvent(ev, msg.time);
   }
 
+  /** Where this hero is (feet), for projectile threats. */
+  setSelf(x: number, y: number, z: number): void {
+    this.selfX = x;
+    this.selfY = y;
+    this.selfZ = z;
+    this.selfKnown = true;
+  }
+
   /** Interpolate every enemy at `renderTime` and refresh the threat list at room time `now`. */
   update(now: number, renderTime: number): void {
     for (const e of this.enemies) this.sample(e, renderTime);
+    const projBest = this.updateProjectiles(now, renderTime);
     // Threats: drop the stale ones (landed or long past), keep the soonest.
     let best: ThreatInfo | null = null;
     for (let i = 0; i < this.nThreats; ) {
@@ -173,7 +218,63 @@ export class CombatView {
       if (!best || t.at < best.at) best = t;
       i++;
     }
+    if (projBest && (!best || projBest.at < best.at)) best = projBest;
     this.threat = best;
+  }
+
+  /** Projectiles at the render time; returns the soonest one coming at this hero (ETA from room time `now`), or null. */
+  private updateProjectiles(now: number, renderTime: number): ThreatInfo | null {
+    let best: ThreatInfo | null = null;
+    const me = this.selfId;
+    const cx = this.selfX,
+      cy = this.selfY + tuning.body.chestHeight,
+      cz = this.selfZ;
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const p = this.projectiles[i]!;
+      const g = PROJ_GRAVITY[p.kind] ?? 0;
+      if (renderTime - p.t0 > (PROJ_LIFE[p.kind] ?? 3) + 0.5) {
+        this.dropProjectile(i);
+        continue;
+      }
+      const tr = Math.max(0, renderTime - p.t0);
+      p.x = p.x0 + p.vx * tr;
+      p.y = p.y0 + p.vy * tr - 0.5 * g * tr * tr;
+      p.z = p.z0 + p.vz * tr;
+      if (p.tgt !== me || !this.selfKnown) continue;
+      // Closest approach to the chest from where it is now (straight-line estimate; bottles are short arcs).
+      const tn = Math.max(0, now - p.t0);
+      const px = p.x0 + p.vx * tn,
+        py = p.y0 + p.vy * tn - 0.5 * g * tn * tn,
+        pz = p.z0 + p.vz * tn;
+      const vy = p.vy - g * tn;
+      const rx = cx - px,
+        ry = cy - py,
+        rz = cz - pz;
+      const vv = p.vx * p.vx + vy * vy + p.vz * p.vz;
+      if (vv < 1e-6) continue;
+      const tca = Math.max(0, Math.min(PROJ_THREAT_HORIZON, (rx * p.vx + ry * vy + rz * p.vz) / vv));
+      const mx = px + p.vx * tca - cx,
+        my = py + vy * tca - cy,
+        mz = pz + p.vz * tca - cz;
+      if (Math.hypot(mx, my, mz) > PROJ_THREAT_MISS || tca >= PROJ_THREAT_HORIZON) continue;
+      const at = now + tca;
+      if (!best || at < best.at) {
+        best = this.projThreat;
+        best.src = p.src;
+        best.atk = p.kind === PK.BOTTLE ? ATK.BOTTLE : p.kind === PK.DART ? ATK.DARTS : ATK.BOLT;
+        best.at = at;
+        best.x = px;
+        best.z = pz;
+      }
+    }
+    return best;
+  }
+
+  private dropProjectile(i: number): void {
+    const p = this.projectiles[i]!;
+    this.projectiles[i] = this.projectiles[this.projectiles.length - 1]!;
+    this.projectiles.pop();
+    this.projPool.push(p);
   }
 
   /** Take the events received since the last call. */
@@ -202,6 +303,7 @@ export class CombatView {
     this.byId.clear();
     this.nThreats = 0;
     this.threat = null;
+    for (let i = this.projectiles.length - 1; i >= 0; i--) this.dropProjectile(i);
     this.pending.length = 0;
     this.log.length = 0;
     this.logHead = 0;
@@ -356,6 +458,28 @@ export class CombatView {
         break;
       case 'miss':
         if (ev.tgt === me) this.clearThreat(ev.src);
+        break;
+      case 'proj': {
+        // The projectile itself is the threat from now on (its estimate replaces the telegraph's).
+        if (ev.tgt === me) this.clearThreat(ev.src);
+        if (this.projectiles.length >= MAX_PROJ) this.dropProjectile(0);
+        const p = this.projPool.pop() ?? { id: 0, kind: 0, src: 0, tgt: 0, x0: 0, y0: 0, z0: 0, vx: 0, vy: 0, vz: 0, t0: 0, x: 0, y: 0, z: 0 };
+        p.id = ev.id;
+        p.kind = ev.kind;
+        p.src = ev.src;
+        p.tgt = ev.tgt;
+        p.x0 = p.x = ev.x;
+        p.y0 = p.y = ev.y;
+        p.z0 = p.z = ev.z;
+        p.vx = ev.vx;
+        p.vy = ev.vy;
+        p.vz = ev.vz;
+        p.t0 = time;
+        this.projectiles.push(p);
+        break;
+      }
+      case 'projEnd':
+        for (let i = this.projectiles.length - 1; i >= 0; i--) if (this.projectiles[i]!.id === ev.id) this.dropProjectile(i);
         break;
       case 'down':
         if (ev.pid === this.selfPid) {

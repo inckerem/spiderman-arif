@@ -529,3 +529,271 @@ export function combatDodgeTest(game: Game): R {
   }
   return r;
 }
+
+/** Spawn spots of the k-th arena of a type nearest the city spawn. */
+function arenaSpotsOf(game: Game, type: number, k = 0): Spot[] {
+  const sp = game.spawns;
+  const s = game.layout.spawn;
+  const ids = [...sp.byType[type]!].sort((a, b) => {
+    const A = sp.arenas[a]!,
+      B = sp.arenas[b]!;
+    return Math.hypot(A.x - s[0], A.z - s[2]) - Math.hypot(B.x - s[0], B.z - s[2]) || a - b;
+  });
+  const a = sp.arenas[ids[k]!]!;
+  const out: Spot[] = [];
+  for (let i = 0; i < a.spots.length; i += 3) out.push([a.spots[i]!, a.spots[i + 1]!, a.spots[i + 2]!]);
+  return out;
+}
+
+/**
+ * Threat cues for shots and bolts: a gunman's aim (telegraph) and a drone's
+ * bolt in flight both become the view's threat with the right timing; Space
+ * just before the impact dodges (misses, no damage); without Space the burst
+ * hits.
+ */
+export function combatShotTest(game: Game): R {
+  const b = new Bench(game, false);
+  const r: R = {};
+  const view = game.combatView;
+  const hc = game.heroCombat;
+  const link = game.combatLink;
+  try {
+    const spots = arenaSpotsOf(game, 1, 0);
+    const home = spots[0]!;
+    const far = spotAt(spots, home, 12);
+    b.place(home[0], home[1], home[2], b.yawTo(far));
+    const gid = b.spawn(2, far);
+    r.gunDist = b.heroDist(gid);
+    /** Wait for a threat from `src` landing more than `lead` s ahead. */
+    const waitThreat = (src: number, lead: number): { at: number; atk: number } | null => {
+      for (let n = 0; n < 120 * 12; n++) {
+        const t = view.threat;
+        if (t && t.src === src && t.at - link.now() > lead) return { at: t.at, atk: t.atk };
+        b.step(1);
+      }
+      return null;
+    };
+    const burst = (dodge: boolean): R => {
+      const thr = waitThreat(gid, 0.3);
+      if (!thr) return { threat: false };
+      const out: R = { threat: true, atk: thr.atk, lead: thr.at - link.now() };
+      out.cueEarly = hc.dodgeWindow(link.now());
+      const hp0 = view.self.hp;
+      const ce = b.logLen,
+        pe = game.eventLog.length;
+      while (thr.at - link.now() > 0.1) b.step(1);
+      out.cue = hc.dodgeWindow(link.now());
+      if (dodge) {
+        b.inp.jump = true;
+        b.step(1);
+        b.inp.jump = false;
+      }
+      while (link.now() < thr.at + 0.6) b.step(1);
+      const evs = b.events(ce);
+      out.shots = evs.filter((e) => e.e === 'shot' && e.src === gid).length;
+      out.misses = evs.filter((e) => e.e === 'miss' && e.src === gid).length;
+      out.hits = evs.filter((e) => isHit(e, gid, SELF)).length;
+      out.hpLost = hp0 - view.self.hp;
+      out.dodgeEvent = b.playerEvents(pe).includes('dodge');
+      out.jumped = b.playerEvents(pe).includes('jump');
+      return out;
+    };
+    r.dodged = burst(true);
+    r.plain = burst(false);
+    // Bring the health back for the bolt.
+    game.combatSim.debugSetHp(1, 100);
+    game.combatSim.debugClear();
+    link.sync();
+    b.step(4);
+    // A drone 9 m off and 4 m up: its bolt is the threat while it flies.
+    const dSpot = spotAt(spots, home, 9);
+    const did = game.combatSim.debugSpawn(4 as 0, dSpot[0], dSpot[1] + 4, dSpot[2]);
+    link.sync();
+    view.update(link.now(), link.renderTime());
+    let projThreat = false,
+      projLead = 0;
+    for (let n = 0; n < 120 * 12 && !projThreat; n++) {
+      b.step(1);
+      const t = view.threat;
+      if (t && t.src === did && view.projectiles.some((p) => p.src === did && p.tgt === SELF)) {
+        projThreat = true;
+        projLead = t.at - link.now();
+        r.boltAtk = t.atk;
+      }
+    }
+    r.projThreat = projThreat;
+    r.projLead = projLead;
+    if (projThreat) {
+      const ce = b.logLen;
+      const hp0 = view.self.hp;
+      // Space when the bolt is 0.12 s out.
+      for (let n = 0; n < 240; n++) {
+        const t = view.threat;
+        if (t && t.at - link.now() <= 0.12) break;
+        b.step(1);
+      }
+      r.boltCue = hc.dodgeWindow(link.now());
+      const pe = game.eventLog.length;
+      b.inp.jump = true;
+      b.step(1);
+      b.inp.jump = false;
+      b.step(90);
+      const evs = b.events(ce);
+      r.boltDodge = b.playerEvents(pe).includes('dodge');
+      // Dodged: the i-frames make it miss, or the sidestep took the hero out of its path.
+      r.boltMiss = evs.some((e) => e.e === 'miss' && e.src === did);
+      r.boltEnded = evs.some((e) => e.e === 'projEnd');
+      r.boltHit = evs.some((e) => isHit(e, did, SELF));
+      r.boltHpLost = hp0 - view.self.hp;
+    }
+    r.rejected = b.events(0).filter((e) => e.e === 'rej').length;
+    r.poseFinite = poseFinite(game);
+  } finally {
+    b.restore();
+  }
+  return r;
+}
+
+/**
+ * The shielded brute: a frontal click bounces off the shield (no damage, the
+ * hero shoved back, no predicted flinch); a right-click tap tears the shield
+ * away (he is not pulled, the shield is no longer drawn); then strikes land.
+ */
+export function combatShieldTest(game: Game): R {
+  const b = new Bench(game, true);
+  const r: R = {};
+  const hc = game.heroCombat;
+  try {
+    const spots = arenaSpotsOf(game, 1, 0);
+    const home = spots[0]!;
+    const near = spotAt(spots, home, 2.4);
+    b.place(home[0], home[1], home[2], b.yawTo(near));
+    const id = b.spawn(3, near);
+    // Facing the hero.
+    const face = (): void => {
+      const e = game.combatSim.enemy(id)!;
+      const p = game.player.pos;
+      e.yaw = Math.atan2(-(p.x - e.pos.x), -(p.z - e.pos.z));
+      game.combatLink.sync();
+    };
+    face();
+    b.step(2);
+    b.aim(id);
+    const hp0 = b.enemy(id)!.hp;
+    const predicted0 = hc.stats.predicted;
+    let ce = b.logLen;
+    const heroBefore = game.player.pos.clone();
+    b.inp.swing = true;
+    b.step(1);
+    b.inp.swing = false;
+    b.step(50);
+    let evs = b.events(ce);
+    const blocked = evs.filter((e) => isHit(e, SELF, id)) as Array<Extract<CombatEvent, { e: 'hit' }>>;
+    r.blockedFl = blocked.map((h) => h.fl);
+    r.blockedDmg = blocked.map((h) => h.dmg);
+    r.hpAfterBlock = b.enemy(id)!.hp;
+    r.hp0 = hp0;
+    r.predictedOnBlock = hc.stats.predicted - predicted0;
+    r.bounced = hc.stats.blocked;
+    r.shoved = Math.hypot(game.player.pos.x - heroBefore.x, game.player.pos.z - heroBefore.z);
+    game.renderOnce();
+    r.shieldDrawnBefore = (game.enemyRender.hiddenProps(id) & 2) === 0;
+    // Yank: back off to 8 m first (a yank aims down the crosshair).
+    const mid = spotAt(spots, near, 8);
+    b.place(mid[0], mid[1], mid[2], b.yawTo(near));
+    face();
+    b.step(2);
+    b.aim(id);
+    const p0 = game.combatSim.enemy(id)!.pos.clone();
+    ce = b.logLen;
+    const pe = game.eventLog.length;
+    b.inp.zip = true;
+    b.step(1);
+    b.inp.zip = false;
+    b.step(30);
+    evs = b.events(ce);
+    const e1 = game.combatSim.enemy(id)!;
+    r.yankEvent = evs.some((e) => e.e === 'yank' && e.tgt === id);
+    r.disarmHit = evs.some((e) => isHit(e, SELF, id) && (e.fl & 64) !== 0);
+    r.shieldless = (e1.flags & 4) !== 0;
+    r.moved = Math.hypot(e1.pos.x - p0.x, e1.pos.z - p0.z);
+    r.zip = b.playerEvents(pe).includes('zipStart');
+    game.renderOnce();
+    r.shieldDrawnAfter = (game.enemyRender.hiddenProps(id) & 2) === 0;
+    // Now a frontal strike lands.
+    b.place(home[0], home[1], home[2], b.yawTo([e1.pos.x, e1.pos.y, e1.pos.z]));
+    face();
+    b.step(30);
+    b.aim(id);
+    ce = b.logLen;
+    b.inp.swing = true;
+    b.step(1);
+    b.inp.swing = false;
+    b.step(60);
+    const land = b.events(ce).filter((e) => isHit(e, SELF, id)) as Array<Extract<CombatEvent, { e: 'hit' }>>;
+    r.afterFl = land.map((h) => h.fl);
+    r.afterDmg = land.map((h) => h.dmg);
+    r.rejected = b.events(0).filter((e) => e.e === 'rej').length;
+    r.poseFinite = poseFinite(game);
+  } finally {
+    b.restore();
+  }
+  return r;
+}
+
+/**
+ * Air combat with a drone: a click on a drone hovering above lunges up to it
+ * (an air lunge, also from the ground) and lands an air strike that pops it
+ * up and staggers it; repeated, the juggle knocks it out and it falls.
+ */
+export function combatDroneTest(game: Game): R {
+  const b = new Bench(game, true);
+  const r: R = {};
+  const pl = game.player;
+  try {
+    const spots = arenaSpotsOf(game, 1, 0);
+    const home = spots[0]!;
+    const sp = spotAt(spots, home, 5);
+    b.place(home[0], home[1], home[2], b.yawTo(sp));
+    const id = game.combatSim.debugSpawn(4 as 0, sp[0], sp[1] + 3.6, sp[2]);
+    game.combatLink.sync();
+    game.combatView.update(game.combatLink.now(), game.combatLink.now());
+    b.step(4);
+    const y0 = pl.pos.y;
+    const ce = b.logLen;
+    let maxRise = 0,
+      airLunge = false,
+      presses = 0;
+    for (let k = 0; k < 6; k++) {
+      const e = b.enemy(id);
+      if (!e || e.state === 'ko') break;
+      // Wait until the hero is free to strike, then click on the drone.
+      for (let n = 0; n < 120 && pl.mode === 6; n++) b.step(1);
+      b.aim(id);
+      b.inp.swing = true;
+      b.step(1);
+      presses++;
+      if (pl.mode === 6 && pl.strike.kind === 0 && pl.strike.air) airLunge = true;
+      b.inp.swing = false;
+      for (let n = 0; n < 50; n++) {
+        b.step(1);
+        maxRise = Math.max(maxRise, pl.pos.y - y0);
+      }
+    }
+    const hits = b.events(ce).filter((e) => isHit(e, SELF, id)) as Array<Extract<CombatEvent, { e: 'hit' }>>;
+    r.presses = presses;
+    r.airLunge = airLunge;
+    r.maxRise = maxRise;
+    r.moves = hits.map((h) => h.move);
+    r.ko = hits.some((h) => (h.fl & 4) !== 0);
+    b.step(240);
+    const e = game.combatSim.enemy(id);
+    r.fellTo = e ? e.pos.y - sp[1] : null;
+    r.webFire = game.eventLog.slice(-200).some((ev) => ev.type === 'webFire');
+    r.rejected = b.events(0).filter((ev) => ev.e === 'rej').length;
+    r.poseFinite = poseFinite(game);
+  } finally {
+    b.restore();
+  }
+  return r;
+}
