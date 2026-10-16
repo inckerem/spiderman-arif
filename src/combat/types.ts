@@ -68,11 +68,18 @@ export const ATK = {
   TAIL_SWEEP: 29,
 } as const;
 
-/** `hit.fl` bit flags. */
-export const HIT = { STAGGER: 1, KNOCKDOWN: 2, KO: 4, BLOCKED: 8, BACK: 16, ABOVE: 32 } as const;
+/**
+ * `hit.fl` bit flags. BLOCKED: a hero strike bounced off a brute's shield (no
+ * damage; `kx/ky/kz` is then the push on the hero). DISARM: a yank tore the
+ * shield or the gun away.
+ */
+export const HIT = { STAGGER: 1, KNOCKDOWN: 2, KO: 4, BLOCKED: 8, BACK: 16, ABOVE: 32, DISARM: 64 } as const;
 
-/** `Enemy.flags` bits. */
-export const EF = { AIRBORNE: 1, DISARMED: 2, SHIELDLESS: 4, TAIL_STUCK: 8, ALERTED: 16, KNOCKED: 32 } as const;
+/** `Enemy.flags` bits (replicated as a byte). WEBBED: pinned at least once (a pinned drone stays wrapped as it falls). */
+export const EF = { AIRBORNE: 1, DISARMED: 2, SHIELDLESS: 4, TAIL_STUCK: 8, ALERTED: 16, KNOCKED: 32, WEBBED: 64 } as const;
+
+/** Projectile kinds (`proj.kind`): drone plasma bolt, thrown bottle, boss feather dart (chunk 8). */
+export const PK = { BOLT: 0, BOTTLE: 1, DART: 2 } as const;
 
 /** Replicated pose ids (`Enemy.anim`), read by the enemy animator (chunk 5). */
 export const ANIM = {
@@ -90,6 +97,17 @@ export const ANIM = {
   KO: 11,
   TAUNT: 12,
   STRAFE: 13,
+  /** Gunman aiming (laser sight on), firing a burst. */
+  AIM: 14,
+  SHOOT: 15,
+  /** Brute: head-down charge (the dash after its wind-up). */
+  CHARGE: 16,
+  /** Thug: bottle wind-up and throw. */
+  THROW: 17,
+  /** Brute: a frontal hit bounced off the raised shield. */
+  BLOCK: 18,
+  /** Drone: cruising flight. */
+  HOVER: 19,
 } as const;
 
 /** Entity ids: enemies 1..0x7fff, heroes 0x8000 + pid (PvP targets). */
@@ -191,8 +209,10 @@ export type CombatEvent =
   | { e: 'hit'; src: number; tgt: number; move: number; dmg: number; hp: number; fl: number; kx: number; ky: number; kz: number }
   /** An attack that a dodge avoided. */
   | { e: 'miss'; src: number; tgt: number }
+  /** A gunman's round: muzzle to end point; `hit` when aimed on target (a dodge can still make it miss). */
   | { e: 'shot'; src: number; x: number; y: number; z: number; tx: number; ty: number; tz: number; hit: boolean }
-  | { e: 'proj'; id: number; kind: number; x: number; y: number; z: number; vx: number; vy: number; vz: number }
+  /** A projectile launched by `src` at hero `tgt` (entity ids); it flies ballistically (`PROJ_GRAVITY[kind]`) until `projEnd`. */
+  | { e: 'proj'; id: number; kind: number; src: number; tgt: number; x: number; y: number; z: number; vx: number; vy: number; vz: number }
   | { e: 'projEnd'; id: number; x: number; y: number; z: number; tgt: number }
   | { e: 'yank' | 'pin'; src: number; tgt: number; dur: number }
   | { e: 'down'; pid: number; until: number }

@@ -183,6 +183,40 @@ export class Particles {
     }
   }
 
+  /**
+   * Combat impact: a comic starburst and sparks flying away from the hitter
+   * (`dir`, normalised horizontal). `blocked` is a cold blue-white clang off a
+   * shield; `strength` (0..1) scales the burst (a KO is 1).
+   */
+  hitSpark(at: Vector3, dir: Vector3, strength: number, blocked: boolean): void {
+    if (blocked) this.c.setRGB(0.75, 0.88, 1.0);
+    else this.c.setRGB(1.0, 0.92, 0.55);
+    this.v.set(0, 0, 0);
+    this.spawn(at, this.v, 0.55 + strength * 0.6, 1.8, 0.16 + strength * 0.08, this.c, 0.95, 0, 0, SHAPE_STAR);
+    const n = 6 + Math.round(strength * 10);
+    for (let i = 0; i < n; i++) {
+      this.v
+        .set(Math.random() - 0.5, Math.random() * 0.8 - 0.1, Math.random() - 0.5)
+        .normalize()
+        .multiplyScalar(3 + Math.random() * 4)
+        .addScaledVector(dir, 3 + strength * 3);
+      if (blocked) this.c.setRGB(0.7, 0.85, 1);
+      else this.c.setRGB(1, 0.55 + Math.random() * 0.35, 0.12);
+      this.spawn(at, this.v, 0.08 + Math.random() * 0.05, 0, 0.22 + Math.random() * 0.2, this.c, 1, 9, 1.5, SHAPE_SOFT);
+    }
+  }
+
+  /** A small coloured flash with a few sparks (muzzle flash, bolt impact, breaking bottle). */
+  flash(at: Vector3, r: number, g: number, b: number, size: number, sparks: number): void {
+    this.c.setRGB(r, g, b);
+    this.v.set(0, 0, 0);
+    this.spawn(at, this.v, size, 1.2, 0.09, this.c, 1, 0, 0, SHAPE_STAR);
+    for (let i = 0; i < sparks; i++) {
+      this.v.set(Math.random() - 0.5, Math.random() - 0.3, Math.random() - 0.5).normalize().multiplyScalar(2 + Math.random() * 4);
+      this.spawn(at, this.v, 0.07 + Math.random() * 0.05, 0, 0.18 + Math.random() * 0.2, this.c, 1, 8, 1.2, SHAPE_SOFT);
+    }
+  }
+
   wallDust(at: Vector3, normal: Vector3): void {
     for (let i = 0; i < 10; i++) {
       this.v.copy(normal).multiplyScalar(1 + Math.random() * 2).add(this.o.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(2));

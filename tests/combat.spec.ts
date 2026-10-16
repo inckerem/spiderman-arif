@@ -56,9 +56,9 @@ test('c1. combat room in the page: chase, hits, view interpolation, down and roo
       g.step(1);
       for (const id of ids) farMin = Math.min(farMin, dist(id, far[0], far[2]));
     }
-    // Capsules render one instance per enemy.
+    // The enemy rigs draw one instance per enemy near the hero.
     game.renderOnce();
-    const capsules = game.combatCapsules.mesh.count;
+    const capsules = game.enemyRender.visibleCount;
     // Down: health to 0, then a roof respawn after downTime.
     C.clear();
     C.setHp(0);
@@ -227,5 +227,138 @@ test('c5. combat dodge: Space in the window makes the swing miss; air dodge keep
   expect(r.airAttachedAfter).toBe(true);
   expect(r.spaceCutWithoutThreat).toBe(true);
   expect(r.poseFinite).toBe(true);
+  expectClean(problems);
+});
+
+// c6. Enemy rigs: 30 enemies of every archetype in view, draw calls within budget, no shader compiles
+// after loading, LOD bands (near, far, hidden), finite poses.
+test('c6. enemy rendering: 30 rigs, draw calls, programs flat, LOD', async ({ page }) => {
+  test.setTimeout(10 * 60 * 1000);
+  const problems = await openGame(page);
+  const r = await page.evaluate(() => {
+    const g = (window as any).__game;
+    const game = g.game;
+    const C = g.combat;
+    C.enable(true);
+    const spots: Vec[] = C.arenaSpots(1, 0);
+    const [hx, hy, hz] = spots[0]!;
+    g.teleport(hx, hy, hz);
+    g.setTime(12);
+    g.step(4);
+    // The widest view: high above and behind the hero.
+    const wide = () => g.setCameraPose(hx + 26, hy + 30, hz + 26, hx, hy, hz, 70);
+    wide();
+    const before = g.stats();
+    const ids: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      const kind = i % 5;
+      const a = (i / 30) * Math.PI * 2;
+      const d = 5 + (i % 3) * 3;
+      ids.push(C.spawn(kind, hx + Math.cos(a) * d, kind === 4 ? hy + 4 : hy + 0.5, hz + Math.sin(a) * d));
+    }
+    g.step(120);
+    wide();
+    const after = g.stats();
+    const st = { ...game.enemyRender.stats };
+    // Close view: poses finite (the bone texture), calls.
+    g.setCameraPose(hx + 6, hy + 2.5, hz + 6, hx, hy + 1, hz, 60);
+    const close = g.stats();
+    const closeSt = { ...game.enemyRender.stats };
+    const bones: Float32Array = game.enemyRender.bones;
+    let finite = true;
+    for (let i = 0; i < bones.length; i++) if (!Number.isFinite(bones[i])) finite = false;
+    // LOD: move the camera away so the ring sits beyond 40 m, then beyond 150 m.
+    g.setCameraPose(hx + 50, hy + 20, hz + 50, hx, hy, hz, 60);
+    g.renderFrame();
+    const far = { ...game.enemyRender.stats };
+    g.setCameraPose(hx + 140, hy + 60, hz + 140, hx, hy, hz, 60);
+    g.renderFrame();
+    const hidden = { ...game.enemyRender.stats };
+    g.clearCameraPose();
+    return { spawned: ids.filter((id) => id > 0).length, before, after, st, close, closeSt, finite, far, hidden };
+  });
+  saveResult('c6-enemy-render', r);
+  console.log('c6. enemy rendering', JSON.stringify(r));
+  expect(r.spawned).toBe(30);
+  expect(r.st.visible).toBe(30);
+  expect(r.st.near + r.st.far).toBe(30);
+  expect(r.closeSt.near).toBe(30);
+  expect(r.after.calls).toBeLessThanOrEqual(600);
+  // Five archetype meshes and their shadow passes (plus a cocoon mesh at most).
+  expect(r.after.calls - r.before.calls).toBeLessThanOrEqual(12);
+  expect(r.after.programs).toBe(r.before.programs);
+  expect(r.close.programs).toBe(r.before.programs);
+  expect(r.finite).toBe(true);
+  expect(r.far.far).toBeGreaterThan(0);
+  expect(r.far.near).toBe(0);
+  expect(r.hidden.visible).toBe(0);
+  expectClean(problems);
+});
+
+// c7. Roster on the client: the dodge cue for gunshots and drone bolts, yanking a brute's shield, hitting a drone in the air.
+test('c7. roster: shot and bolt threat cues with dodges, a brute shield yank, air strikes on a drone', async ({ page }) => {
+  test.setTimeout(15 * 60 * 1000);
+  const problems = await openGame(page);
+  const shot = await page.evaluate(() => (window as any).__game.combat.shotTest());
+  saveResult('c7-combat-shots', shot);
+  console.log('c7. shots', JSON.stringify(shot));
+  expect(shot.gunDist).toBeGreaterThan(7);
+  expect(shot.dodged.threat).toBe(true);
+  expect(shot.dodged.atk).toBe(19);
+  expect(shot.dodged.cue).toBe(true);
+  expect(shot.dodged.shots).toBeGreaterThan(0);
+  expect(shot.dodged.misses).toBeGreaterThan(0);
+  expect(shot.dodged.hits).toBe(0);
+  expect(shot.dodged.hpLost).toBe(0);
+  expect(shot.dodged.dodgeEvent).toBe(true);
+  expect(shot.dodged.jumped).toBe(false);
+  expect(shot.plain.threat).toBe(true);
+  expect(shot.plain.hits).toBeGreaterThan(0);
+  expect(shot.plain.hpLost).toBeGreaterThan(0);
+  expect(shot.projThreat).toBe(true);
+  expect(shot.boltAtk).toBe(22);
+  expect(shot.projLead).toBeGreaterThan(0.1);
+  expect(shot.boltCue).toBe(true);
+  expect(shot.boltDodge).toBe(true);
+  expect(shot.boltEnded).toBe(true);
+  expect(shot.boltHit).toBe(false);
+  expect(shot.boltHpLost).toBe(0);
+  expect(shot.rejected).toBe(0);
+  expect(shot.poseFinite).toBe(true);
+
+  const sh = await page.evaluate(() => (window as any).__game.combat.shieldTest());
+  saveResult('c7-combat-shield', sh);
+  console.log('c7. shield', JSON.stringify(sh));
+  expect(sh.blockedFl.length).toBeGreaterThan(0);
+  expect(sh.blockedFl[0] & 8).toBe(8);
+  expect(sh.blockedDmg[0]).toBe(0);
+  expect(sh.hpAfterBlock).toBe(sh.hp0);
+  expect(sh.predictedOnBlock).toBe(0);
+  expect(sh.bounced).toBeGreaterThan(0);
+  expect(sh.shieldDrawnBefore).toBe(true);
+  expect(sh.yankEvent).toBe(true);
+  expect(sh.disarmHit).toBe(true);
+  expect(sh.shieldless).toBe(true);
+  expect(sh.moved).toBeLessThan(0.5);
+  expect(sh.zip).toBe(false);
+  expect(sh.shieldDrawnAfter).toBe(false);
+  expect(sh.afterDmg.length).toBeGreaterThan(0);
+  expect(sh.afterDmg[0]).toBeGreaterThan(0);
+  expect(sh.afterFl[0] & 8).toBe(0);
+  expect(sh.rejected).toBe(0);
+  expect(sh.poseFinite).toBe(true);
+
+  const dr = await page.evaluate(() => (window as any).__game.combat.droneTest());
+  saveResult('c7-combat-drone', dr);
+  console.log('c7. drone', JSON.stringify(dr));
+  expect(dr.airLunge).toBe(true);
+  expect(dr.maxRise).toBeGreaterThan(1.5);
+  expect(dr.moves.length).toBeGreaterThanOrEqual(3);
+  expect(dr.moves.every((m: number) => m === 4)).toBe(true);
+  expect(dr.ko).toBe(true);
+  expect(dr.fellTo).toBeLessThan(1);
+  expect(dr.webFire).toBe(false);
+  expect(dr.rejected).toBe(0);
+  expect(dr.poseFinite).toBe(true);
   expectClean(problems);
 });

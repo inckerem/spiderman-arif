@@ -9,7 +9,7 @@ import { F_BUILDING } from '../src/physics/collision';
 import { findRespawnRoof } from '../src/physics/safeSpot';
 import { tuning } from '../src/config/tuning';
 import { AR, AR_NAMES, arenaSuits, arenaTypesFor, buildSpawnPoints, spotFree, type SpawnPoints } from '../src/combat/spawnPoints';
-import { ATK, EK, ES, HERO_ID_BASE, HIT, MOVE, type CombatEvent, type CombatIntent } from '../src/combat/types';
+import { ANIM, ATK, EF, EK, ES, HERO_ID_BASE, HIT, MOVE, PK, type CombatEvent, type CombatIntent } from '../src/combat/types';
 import { CombatSim, capsuleDistance, chainMove } from '../src/combat/combatSim';
 import { PosHistory } from '../src/combat/history';
 import { kindInfo } from '../src/combat/roster';
@@ -765,4 +765,491 @@ test('combat: position history interpolates, clamps and wraps @quick', () => {
   expect(h.sample(1, 0, o)).toBe(false);
   h.clear(0);
   expect(h.sample(0, 3, o)).toBe(false);
+});
+
+// --- Roster (M11 chunk 6): gunmen, brutes, drones, bottles ---
+
+/** The k-th arena of a type nearest the city spawn: centre and spots. */
+function arenaOf(type: number, k = 0): { x: number; y: number; z: number; spots: Array<[number, number, number]> } {
+  const w = world();
+  const s = w.layout.spawn;
+  const ids = [...w.spawns.byType[type]!].sort((a, b) => {
+    const A = w.spawns.arenas[a]!,
+      B = w.spawns.arenas[b]!;
+    return Math.hypot(A.x - s[0], A.z - s[2]) - Math.hypot(B.x - s[0], B.z - s[2]) || a - b;
+  });
+  const a = w.spawns.arenas[ids[k]!]!;
+  const spots: Array<[number, number, number]> = [];
+  for (let i = 0; i < a.spots.length; i += 3) spots.push([a.spots[i]!, a.spots[i + 1]!, a.spots[i + 2]!]);
+  return { x: a.x, y: a.y, z: a.z, spots };
+}
+
+type Hit = Extract<CombatEvent, { e: 'hit' }>;
+const ME = HERO_ID_BASE + 1;
+
+test('combat sim: gunmen keep their distance, aim, fire bursts at a moving hero; dodges make them miss; a yank disarms', () => {
+  const ar = arenaOf(AR.INTERSECTION, 0);
+  const g = tuning.enemies.gunman;
+  const run = (dodge: boolean) => {
+    const sim = makeSim(11);
+    const buf: CombatEvent[] = [];
+    // The hero flies a fast circle (a swing's speed) 6 m up around the crossing; the gunman stands at its edge.
+    const R = 14,
+      speed = 18,
+      up = 6;
+    const pos = (t: number): [number, number, number, number, number] => {
+      const a = (t * speed) / R;
+      return [ar.x + Math.cos(a) * R, ar.y + up, ar.z + Math.sin(a) * R, -Math.sin(a) * speed, Math.cos(a) * speed];
+    };
+    const [x0, y0, z0] = pos(0);
+    sim.upsertHero({ pid: 1, x: x0, y: y0, z: z0, vx: 0, vy: 0, vz: 0, mode: 2, grounded: false, facing: 0, afk: false, t: sim.time });
+    const id = sim.debugSpawn(EK.GUNMAN, ar.x + 4, ar.y + 0.5, ar.z - 3);
+    let seq = 0;
+    const teles: Array<{ at: number; done: boolean }> = [];
+    let shots = 0,
+      hitShots = 0,
+      hits = 0,
+      misses = 0,
+      minD = Infinity,
+      maxD = 0,
+      aimAnim = 0;
+    for (let s = 0; s < 30 * 25; s++) {
+      const [x, y, z, vx, vz] = pos(sim.time);
+      sim.upsertHero({ pid: 1, x, y, z, vx, vy: 0, vz, mode: 2, grounded: false, facing: 0, afk: false, t: sim.time });
+      // The bot dodges once per telegraph, 0.1 s before its impact (the burst dodges as one).
+      if (dodge) {
+        for (const t of teles) {
+          if (!t.done && sim.time >= t.at - 0.1 - 1e-9) {
+            t.done = true;
+            sim.intent(1, { k: 'dodge', seq: ++seq, t: sim.time });
+          }
+        }
+      }
+      sim.step();
+      buf.length = 0;
+      sim.drainEvents(buf);
+      for (const e of buf) {
+        if (e.e === 'tele' && e.src === id) teles.push({ at: e.at, done: false });
+        if (e.e === 'shot' && e.src === id) {
+          shots++;
+          if (e.hit) hitShots++;
+        }
+        if (e.e === 'hit' && e.src === id && e.tgt === ME) hits++;
+        if (e.e === 'miss' && e.src === id) misses++;
+      }
+      const en = sim.enemy(id)!;
+      if (en.anim === ANIM.AIM) aimAnim++;
+      if (s > 60) {
+        const d = Math.hypot(en.pos.x - x, en.pos.z - z);
+        minD = Math.min(minD, d);
+        maxD = Math.max(maxD, d);
+      }
+    }
+    return { teles: teles.length, shots, hitShots, hits, misses, minD, maxD, aimAnim, hp: sim.hero(1)!.hp, hash: sim.hash() };
+  };
+  const plain = run(false);
+  const dodged = run(true);
+  const again = run(false);
+
+  // Distance keeping on the ground: a hero walks up to the gunman; he backs off.
+  const sim = makeSim(12);
+  const buf: CombatEvent[] = [];
+  hero(sim, 1, ar.x, ar.y, ar.z);
+  const gid = sim.debugSpawn(EK.GUNMAN, ar.x + 6, ar.y + 0.5, ar.z);
+  for (let s = 0; s < 30 * 4; s++) {
+    hero(sim, 1, ar.x, ar.y, ar.z);
+    sim.step();
+    sim.drainEvents(buf);
+  }
+  const kept = Math.hypot(sim.enemy(gid)!.pos.x - ar.x, sim.enemy(gid)!.pos.z - ar.z);
+  // A yank disarms him: he brawls (punch telegraphs) from then on.
+  const ge = sim.enemy(gid)!;
+  sim.intent(1, { k: 'yank', seq: 1, target: gid, viewT: sim.time - DT, hx: ar.x, hy: ar.y, hz: ar.z });
+  buf.length = 0;
+  for (let s = 0; s < 30 * 6; s++) {
+    hero(sim, 1, ar.x, ar.y, ar.z);
+    sim.step();
+    sim.drainEvents(buf);
+  }
+  const yankHit = buf.find((e) => e.e === 'hit' && e.tgt === gid && e.move === MOVE.YANK) as Hit | undefined;
+  const afterYank = buf.filter((e) => e.e === 'tele' && e.src === gid).map((e) => (e as Extract<CombatEvent, { e: 'tele' }>).atk);
+  const r = { plain, dodged, again: again.hash === plain.hash, kept, disarmed: (ge.flags & EF.DISARMED) !== 0, yankFl: yankHit?.fl, afterYank, shotsAfter: buf.filter((e) => e.e === 'shot' && e.src === gid).length };
+  saveResult('combat-gunman', r);
+  console.log('combat gunman', JSON.stringify(r));
+  expect(plain.teles).toBeGreaterThan(3);
+  expect(plain.aimAnim).toBeGreaterThan(0);
+  expect(plain.shots).toBeGreaterThanOrEqual(plain.teles * g.burst - g.burst);
+  expect(plain.hits).toBeGreaterThan(0);
+  expect(plain.hp).toBeLessThan(tuning.combat.maxHp);
+  expect(plain.minD).toBeGreaterThan(g.keepMin - 4);
+  expect(r.again).toBe(true);
+  expect(dodged.shots).toBeGreaterThan(0);
+  expect(dodged.hits).toBe(0);
+  expect(dodged.misses).toBeGreaterThan(0);
+  expect(kept).toBeGreaterThan(g.keepMin * 0.6 + 2);
+  expect(r.disarmed).toBe(true);
+  expect(r.yankFl! & HIT.DISARM).toBe(HIT.DISARM);
+  expect(r.afterYank.every((a) => a === ATK.PUNCH)).toBe(true);
+  expect(r.afterYank.length).toBeGreaterThan(0);
+  expect(r.shotsAfter).toBe(0);
+});
+
+test('combat sim: brutes block frontal strikes; behind, above, a torn shield, a pin stun and takedowns land; charges knock down', () => {
+  const ar = arenaOf(AR.INTERSECTION, 1);
+  const sim = makeSim(21);
+  const buf: CombatEvent[] = [];
+  const at = { x: ar.x, y: ar.y, z: ar.z };
+  const stepN = (n: number) => {
+    for (let i = 0; i < n; i++) {
+      hero(sim, 1, at.x, at.y, at.z);
+      sim.step();
+      sim.drainEvents(buf);
+    }
+  };
+  // Passive brutes (no attacks) for the guard checks.
+  const E = tuning.enemies;
+  const saved = E.aggroRange;
+  E.aggroRange = 0;
+  let seq = 0;
+  const lastHit = (id: number) => buf.filter((e) => e.e === 'hit' && e.tgt === id).pop() as Hit | undefined;
+  /** A brute 1.6 m away facing yaw `face` (radians from facing the hero). */
+  const brute = (face: number) => {
+    sim.debugClear();
+    const id = sim.debugSpawn(EK.BRUTE, ar.x + 1.6, ar.y + 0.5, ar.z);
+    const e = sim.enemy(id)!;
+    // Facing the hero (at -x) is yaw = atan2(-dx, -dz) with dx = -1.6: +pi/2.
+    e.yaw = Math.PI / 2 + face;
+    at.x = ar.x;
+    at.y = e.pos.y;
+    at.z = ar.z;
+    // (Strikes stay further apart than the room's minimum interval.)
+    stepN(6);
+    return id;
+  };
+  const jab = (id: number, hy = at.y) => {
+    const e = sim.enemy(id)!;
+    const hp0 = e.hp;
+    sim.intent(1, strike(++seq, id, MOVE.JAB, sim, at.x, hy, at.z));
+    stepN(1);
+    const h = lastHit(id)!;
+    return { fl: h.fl, dmg: h.dmg, lost: hp0 - sim.enemy(id)!.hp, combo: sim.hero(1)!.combo };
+  };
+  const front = jab(brute(0));
+  const back = jab(brute(Math.PI));
+  // From above: the hero 1.5 m up (on a ledge or in the air).
+  const idA = brute(0);
+  at.y += 1.5;
+  stepN(2);
+  const above = jab(idA, at.y);
+  at.y -= 1.5;
+  // Yank: the shield comes off, he is not pulled; then frontal hits land.
+  const idY = brute(0);
+  const p0 = sim.enemy(idY)!.pos.clone();
+  sim.intent(1, { k: 'yank', seq: ++seq, target: idY, viewT: sim.time - DT, hx: at.x, hy: at.y, hz: at.z });
+  stepN(1);
+  const ey = sim.enemy(idY)!;
+  const yank = { shieldless: (ey.flags & EF.SHIELDLESS) !== 0, guard: ey.guard, moved: Math.hypot(ey.pos.x - p0.x, ey.pos.z - p0.z), fl: lastHit(idY)!.fl };
+  stepN(Math.ceil(1 / DT));
+  sim.enemy(idY)!.yaw = Math.PI / 2;
+  const afterYank = jab(idY);
+  // Pin: stunned for pinStun (not pinTime), hits land meanwhile.
+  const idP = brute(0);
+  sim.intent(1, { k: 'pin', seq: ++seq, target: idP, viewT: sim.time - DT, hx: at.x, hy: at.y, hz: at.z });
+  stepN(1);
+  const pinEv = buf.filter((e) => e.e === 'pin' && e.tgt === idP).pop() as { dur: number } | undefined;
+  const pinnedHit = jab(idP);
+  let pinnedFor = 0;
+  while (sim.enemy(idP)!.state === ES.PINNED && pinnedFor < 200) {
+    stepN(1);
+    pinnedFor++;
+  }
+  // Takedown ignores the guard.
+  const idT = brute(0);
+  sim.hero(1)!.focus = 100;
+  sim.intent(1, { k: 'takedown', seq: ++seq, target: idT, viewT: sim.time - DT, hx: at.x, hy: at.y, hz: at.z });
+  stepN(1);
+  const takedown = sim.enemy(idT)!.state;
+  E.aggroRange = saved;
+
+  // Charge: an alerted brute with the hero 11 m away (the hero backs off to keep the distance) winds up and runs it down.
+  sim.debugClear();
+  const av = arenaOf(AR.AVENUE, 0);
+  // Along the avenue: the hero 5.5 m one way from its centre, the brute 5.5 m the other.
+  const fs = av.spots.reduce((b, p) => (Math.hypot(p[0] - av.x, p[2] - av.z) > Math.hypot(b[0] - av.x, b[2] - av.z) ? p : b), av.spots[0]!);
+  const fl = Math.hypot(fs[0] - av.x, fs[2] - av.z) || 1;
+  const ux = (fs[0] - av.x) / fl,
+    uz = (fs[2] - av.z) / fl;
+  at.x = av.x - ux * 5.5;
+  at.z = av.z - uz * 5.5;
+  at.y = sim.world.supportHeight(at.x, at.z, av.y + 1, 0).y;
+  const idC = sim.debugSpawn(EK.BRUTE, av.x + ux * 5.5, av.y + 0.5, av.z + uz * 5.5);
+  buf.length = 0;
+  let chargeTele: Extract<CombatEvent, { e: 'tele' }> | undefined;
+  for (let s = 0; s < 30 * 20 && !chargeTele; s++) {
+    // Keep 11 m away from him along the line between.
+    const e = sim.enemy(idC)!;
+    const dx = at.x - e.pos.x,
+      dz = at.z - e.pos.z;
+    const d = Math.hypot(dx, dz) || 1;
+    if (d < 10) {
+      at.x = e.pos.x + (dx / d) * 11;
+      at.z = e.pos.z + (dz / d) * 11;
+      at.y = sim.world.supportHeight(at.x, at.z, at.y + 1, 0).y;
+    }
+    stepN(1);
+    chargeTele = buf.find((ev) => ev.e === 'tele' && ev.src === idC && ev.atk === ATK.CHARGE) as typeof chargeTele;
+  }
+  let chargeHit: Hit | undefined;
+  let special = false;
+  for (let s = 0; s < 30 * 4 && !chargeHit; s++) {
+    stepN(1);
+    if (sim.enemy(idC)!.state === ES.SPECIAL) special = true;
+    chargeHit = buf.find((ev) => ev.e === 'hit' && ev.src === idC && ev.tgt === ME) as Hit | undefined;
+  }
+  const r = { front, back, above, yank, afterYank, pinDur: pinEv?.dur, pinnedHit, pinnedFor: pinnedFor * DT, takedown, chargeTele: !!chargeTele, special, chargeHit: chargeHit ? { move: chargeHit.move, dmg: chargeHit.dmg, fl: chargeHit.fl } : null };
+  saveResult('combat-brute', r);
+  console.log('combat brute', JSON.stringify(r));
+  expect(front.fl & HIT.BLOCKED).toBe(HIT.BLOCKED);
+  expect(front.dmg).toBe(0);
+  expect(front.lost).toBe(0);
+  expect(front.combo).toBe(0);
+  expect(back.fl & HIT.BACK).toBe(HIT.BACK);
+  expect(back.lost).toBe(tuning.combat.jabDmg);
+  expect(above.fl & HIT.ABOVE).toBe(HIT.ABOVE);
+  expect(above.lost).toBe(tuning.combat.jabDmg);
+  expect(yank.shieldless).toBe(true);
+  expect(yank.guard).toBe(0);
+  expect(yank.moved).toBeLessThan(0.3);
+  expect(yank.fl & HIT.DISARM).toBe(HIT.DISARM);
+  expect(afterYank.fl & HIT.BLOCKED).toBe(0);
+  expect(afterYank.lost).toBe(tuning.combat.jabDmg);
+  expect(r.pinDur).toBe(tuning.enemies.brute.pinStun);
+  expect(pinnedHit.lost).toBe(tuning.combat.jabDmg);
+  expect(r.pinnedFor).toBeLessThan(tuning.enemies.brute.pinStun + 0.1);
+  expect(takedown).toBe(ES.KO);
+  expect(r.chargeTele).toBe(true);
+  expect(special).toBe(true);
+  expect(r.chargeHit).not.toBeNull();
+  expect(r.chargeHit!.move).toBe(ATK.CHARGE);
+  expect(r.chargeHit!.dmg).toBe(tuning.enemies.brute.chargeDamage);
+  expect(r.chargeHit!.fl & HIT.KNOCKDOWN).toBe(HIT.KNOCKDOWN);
+});
+
+test('combat sim: drones fly above the hero, fire bolts (dodgeable), are juggled by air strikes and dropped by yank or pin', () => {
+  const ar = arenaOf(AR.INTERSECTION, 2);
+  const run = (dodge: boolean) => {
+    const sim = makeSim(31);
+    const buf: CombatEvent[] = [];
+    hero(sim, 1, ar.x, ar.y, ar.z);
+    const id = sim.debugSpawn(EK.DRONE, ar.x + 9, ar.y + 4, ar.z + 3);
+    let seq = 0,
+      bolts = 0,
+      hits = 0,
+      misses = 0,
+      minUp = Infinity,
+      maxD = 0,
+      nan = false,
+      moved = 0;
+    const dodged = new Set<number>();
+    const start = sim.enemy(id)!.pos.clone();
+    for (let s = 0; s < 30 * 20; s++) {
+      hero(sim, 1, ar.x, ar.y, ar.z);
+      if (dodge) {
+        // Dodge each bolt 0.15 s before it reaches the chest.
+        for (const p of sim.projectiles.list) {
+          if (dodged.has(p.id) || p.tgt !== ME) continue;
+          const d = Math.hypot(p.x - ar.x, p.y - (ar.y + 1.1), p.z - ar.z);
+          if (d / Math.hypot(p.vx, p.vy, p.vz) < 0.15 + DT) {
+            dodged.add(p.id);
+            sim.intent(1, { k: 'dodge', seq: ++seq, t: sim.time });
+          }
+        }
+      }
+      sim.step();
+      buf.length = 0;
+      sim.drainEvents(buf);
+      for (const e of buf) {
+        if (e.e === 'proj' && e.src === id) bolts++;
+        if (e.e === 'hit' && e.src === id && e.tgt === ME) hits++;
+        if (e.e === 'miss' && e.src === id) misses++;
+      }
+      const e = sim.enemy(id)!;
+      if (!Number.isFinite(e.pos.x + e.pos.y + e.pos.z)) nan = true;
+      if (s > 90) {
+        minUp = Math.min(minUp, e.pos.y - ar.y);
+        maxD = Math.max(maxD, Math.hypot(e.pos.x - ar.x, e.pos.z - ar.z));
+      }
+      moved = Math.max(moved, e.pos.distanceTo(start));
+    }
+    return { bolts, hits, misses, minUp, maxD, nan, moved, hash: sim.hash() };
+  };
+  const plain = run(false);
+  const dodged = run(true);
+  const again = run(false);
+
+  // Juggle: three air strikes from below-beside it KO a drone; each pops it up; KO'd it falls to the ground.
+  const sim = makeSim(32);
+  const buf: CombatEvent[] = [];
+  const E = tuning.enemies;
+  const saved = E.aggroRange;
+  E.aggroRange = 0;
+  const hx = ar.x,
+    hy = ar.y + 3,
+    hz = ar.z;
+  const stepN = (n: number) => {
+    for (let i = 0; i < n; i++) {
+      sim.upsertHero({ pid: 1, x: hx, y: hy, z: hz, vx: 0, vy: 0, vz: 0, mode: 1, grounded: false, facing: 0, afk: false, t: sim.time });
+      sim.step();
+      sim.drainEvents(buf);
+    }
+  };
+  const id = sim.debugSpawn(EK.DRONE, hx + 1.6, hy + 1.2, hz);
+  stepN(2);
+  let seq = 0;
+  const pops: number[] = [];
+  const states: number[] = [];
+  for (let k = 0; k < 3; k++) {
+    const e = sim.enemy(id)!;
+    // The hero hangs right below-beside it (an air lunge ends there).
+    sim.upsertHero({ pid: 1, x: e.pos.x - 1.4, y: e.pos.y - 1.1, z: e.pos.z, vx: 0, vy: 0, vz: 0, mode: 1, grounded: false, facing: 0, afk: false, t: sim.time });
+    sim.intent(1, strike(++seq, id, MOVE.AIR, sim, e.pos.x - 1.4, e.pos.y - 1.1, e.pos.z, sim.time));
+    sim.step();
+    sim.drainEvents(buf);
+    pops.push(sim.enemy(id)!.vel.y);
+    states.push(sim.enemy(id)!.state);
+    stepN(8);
+  }
+  const airHits = buf.filter((e) => e.e === 'hit' && e.tgt === id && e.src === ME) as Hit[];
+  const rej = buf.filter((e) => e.e === 'rej');
+  let fellTo = NaN;
+  for (let s = 0; s < 30 * 3; s++) stepN(1);
+  const ko = sim.enemy(id);
+  if (ko) fellTo = ko.pos.y - kindInfo(EK.DRONE).radius - sim.world.supportHeight(ko.pos.x, ko.pos.z, ko.pos.y, 0).y;
+  // Yank and pin drop a drone at once.
+  const idY = sim.debugSpawn(EK.DRONE, hx + 6, hy + 2, hz + 2);
+  const idP = sim.debugSpawn(EK.DRONE, hx - 6, hy + 2, hz - 2);
+  stepN(2);
+  sim.intent(1, { k: 'yank', seq: ++seq, target: idY, viewT: sim.time - DT, hx, hy, hz });
+  sim.intent(1, { k: 'pin', seq: ++seq, target: idP, viewT: sim.time - DT, hx, hy, hz });
+  stepN(1);
+  const yState = sim.enemy(idY)!.state,
+    pState = sim.enemy(idP)!.state,
+    pWebbed = (sim.enemy(idP)!.flags & EF.WEBBED) !== 0;
+  E.aggroRange = saved;
+  const r = { plain, dodged, again: again.hash === plain.hash, pops, states, airHits: airHits.map((h) => [h.move, h.dmg, h.fl]), rej: rej.length, koState: ko?.state, fellTo, yState, pState, pWebbed };
+  saveResult('combat-drone', r);
+  console.log('combat drone', JSON.stringify(r));
+  expect(plain.nan).toBe(false);
+  expect(plain.moved).toBeGreaterThan(3);
+  expect(plain.minUp).toBeGreaterThan(2.5);
+  expect(plain.maxD).toBeLessThan(20);
+  expect(plain.bolts).toBeGreaterThan(3);
+  expect(plain.hits).toBeGreaterThan(0);
+  expect(r.again).toBe(true);
+  expect(dodged.bolts).toBeGreaterThan(3);
+  expect(dodged.hits).toBe(0);
+  expect(dodged.misses).toBeGreaterThan(0);
+  expect(r.rej).toBe(0);
+  expect(airHits.length).toBe(3);
+  expect(airHits.every((h) => h.move === MOVE.AIR)).toBe(true);
+  expect(pops[0]).toBeGreaterThan(1);
+  expect(states[0]).toBe(ES.STAGGER);
+  expect(r.koState).toBe(ES.KO);
+  expect(Math.abs(fellTo)).toBeLessThan(0.1);
+  expect(yState).toBe(ES.KO);
+  expect(pState).toBe(ES.KO);
+  expect(pWebbed).toBe(true);
+});
+
+test('combat sim: thugs throw bottles at a hero above them', () => {
+  const ar = arenaOf(AR.STOREFRONT, 0);
+  const sim = makeSim(41);
+  const buf: CombatEvent[] = [];
+  const [sx, sy, sz] = ar.spots[0]!;
+  // The hero clings 5 m up, 4 m from a thug (a wall, a fire escape).
+  const hx = sx + 4,
+    hy = sy + 5,
+    hz = sz;
+  const id = sim.debugSpawn(EK.THUG, sx, sy + 0.5, sz);
+  let bottles = 0,
+    hits: Hit[] = [],
+    ends = 0;
+  for (let s = 0; s < 30 * 10; s++) {
+    sim.upsertHero({ pid: 1, x: hx, y: hy, z: hz, vx: 0, vy: 0, vz: 0, mode: 4, grounded: false, facing: 0, afk: false, t: sim.time });
+    sim.step();
+    buf.length = 0;
+    sim.drainEvents(buf);
+    for (const e of buf) {
+      if (e.e === 'proj' && e.src === id && e.kind === PK.BOTTLE) bottles++;
+      if (e.e === 'projEnd') ends++;
+      if (e.e === 'hit' && e.src === id && e.tgt === ME) hits.push(e);
+    }
+  }
+  const r = { bottles, ends, hits: hits.map((h) => [h.move, h.dmg]) };
+  console.log('combat bottles', JSON.stringify(r));
+  expect(bottles).toBeGreaterThan(1);
+  expect(ends).toBeGreaterThan(0);
+  expect(hits.length).toBeGreaterThan(0);
+  expect(hits.every((h) => h.move === ATK.BOTTLE && h.dmg === tuning.enemies.thug.bottleDamage)).toBe(true);
+});
+
+test('combat sim: a mixed roster is deterministic and stays out of geometry', () => {
+  const runMixed = (seed: number) => {
+    const ar = arenaOf(AR.INTERSECTION, 3);
+    const sim = makeSim(seed, false, 30);
+    const buf: CombatEvent[] = [];
+    for (let i = 0; i < 15; i++) {
+      const s = ar.spots[(i * 3 + 2) % ar.spots.length]!;
+      sim.debugSpawn((i % 5) as 0, s[0], i % 5 === EK.DRONE ? s[1] + 4 : s[1] + 0.5, s[2]);
+    }
+    const hashes: string[] = [];
+    let nan = 0,
+      maxPen = 0,
+      events = 0,
+      seq = 0,
+      stepMs = 0;
+    for (let s = 0; s < 30 * 30; s++) {
+      const a = s * DT * 0.4;
+      const x = ar.x + Math.cos(a) * 6,
+        z = ar.z + Math.sin(a) * 6;
+      const y = sim.world.supportHeight(x, z, ar.y + 2, 0).y;
+      sim.upsertHero({ pid: 1, x, y, z, vx: -Math.sin(a) * 2.4, vy: 0, vz: Math.cos(a) * 2.4, mode: 0, grounded: true, facing: 0, afk: false, t: sim.time });
+      // Fight back now and then: the nearest enemy in reach, yank or pin the farther ones.
+      if (s % 20 === 0) {
+        let best = -1,
+          bd = 1e9;
+        for (const e of sim.enemies) {
+          if (e.state === ES.KO) continue;
+          const d = Math.hypot(e.pos.x - x, e.pos.z - z);
+          if (d < bd) {
+            bd = d;
+            best = e.id;
+          }
+        }
+        if (best > 0 && bd < 2.5) sim.intent(1, strike(++seq, best, chainMove(sim.hero(1)!.combo), sim, x, y, z));
+        else if (best > 0 && s % 60 === 0) sim.intent(1, { k: s % 120 === 0 ? 'pin' : 'yank', seq: ++seq, target: best, viewT: sim.time - DT, hx: x, hy: y, hz: z });
+      }
+      const t0 = performance.now();
+      sim.step();
+      stepMs += performance.now() - t0;
+      buf.length = 0;
+      sim.drainEvents(buf);
+      events += buf.length;
+      for (const e of sim.enemies) {
+        if (!Number.isFinite(e.pos.x + e.pos.y + e.pos.z)) nan++;
+        const info = kindInfo(e.kind);
+        if (!info.flyer) maxPen = Math.max(maxPen, sim.world.capsulePenetration(e.pos.x, e.pos.y, e.pos.z, info.radius, info.height));
+      }
+      if (s % 30 === 29) hashes.push(sim.hash());
+    }
+    return { hashes, nan, maxPen, events, msPerStep: stepMs / 900 };
+  };
+  const a = runMixed(77);
+  const b = runMixed(77);
+  console.log('combat mixed roster', JSON.stringify({ ...a, hashes: a.hashes.length }));
+  expect(b.hashes).toEqual(a.hashes);
+  expect(a.nan).toBe(0);
+  expect(a.maxPen).toBeLessThan(0.03);
+  expect(a.events).toBeGreaterThan(50);
+  expect(a.msPerStep).toBeLessThan(2);
 });

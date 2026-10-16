@@ -1796,7 +1796,7 @@ export class Player {
     s.stop = stop;
     s.air = air;
     s.stall = 0;
-    s.lastDist = Math.hypot(tx - this.pos.x, tz - this.pos.z);
+    s.lastDist = air ? Math.hypot(tx - this.pos.x, ty - this.pos.y, tz - this.pos.z) : Math.hypot(tx - this.pos.x, tz - this.pos.z);
     this.diving = false;
     this.faceToward(tx, tz);
     this.setMode(MODE_STRIKE);
@@ -1975,7 +1975,8 @@ export class Player {
     const dx = s.tx - this.pos.x,
       dy = s.ty - this.pos.y,
       dz = s.tz - this.pos.z;
-    const dh = Math.hypot(dx, dz);
+    // An air lunge measures in 3D (a target above, like a drone); a ground lunge horizontally.
+    const dh = s.air ? Math.hypot(dx, dy, dz) : Math.hypot(dx, dz);
     if (dh <= s.stop + 0.05 || s.t > s.dur) {
       this.endLunge(dh <= s.stop + 0.35);
       return;
@@ -2002,7 +2003,7 @@ export class Player {
       } else s.air = true;
     }
     // Blocked or pushed off course (a wall, a car): abort like zip.
-    const nd = Math.hypot(s.tx - this.pos.x, s.tz - this.pos.z);
+    const nd = Math.hypot(s.tx - this.pos.x, s.air ? s.ty - this.pos.y : 0, s.tz - this.pos.z);
     if (s.lastDist - nd < sp * dt * 0.25) s.stall += dt;
     else s.stall = 0;
     s.lastDist = nd;
